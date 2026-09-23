@@ -94,6 +94,26 @@ const state = {
     entry_refusals: 0,
   },
   log: [],
+  fomo: {
+    provider: process.env.FOMO_PROVIDER || 'official',
+    base_url: process.env.FOMO_API_BASE || 'https://prod-api.fomo.family',
+    window: process.env.FOMO_WINDOW || '24h',
+    clan: { id: 'clan-conviction', name: 'Conviction Capital', pnl_usd: 772254.03, member_count: 22 },
+    trader: {
+      user_id: 'u-1',
+      handle: process.env.FOMO_TRADER_HANDLE || 'MrMetavers3',
+      display_name: 'MrMetavers3',
+      pnl_usd: 454800.0,
+      verified: true,
+    },
+    mirrored: 0,
+    skipped: 0,
+    failed: 0,
+    last_discovery: new Date().toISOString(),
+    last_poll: null,
+    last_error: null,
+    recent: [],
+  },
 };
 
 const TOKENS = [
@@ -255,6 +275,79 @@ function recordExit(tokenAddress, pnlSol) {
   }
 }
 
+/** Simulated copy-trade: the dashboard should show buys and skips moving. */
+function fomoTick() {
+  const f = state.fomo;
+  f.last_poll = new Date().toISOString();
+
+  const roll = Math.random();
+  const spec = TOKENS[Math.floor(Math.random() * TOKENS.length)];
+  const usd = Math.round(5 + Math.random() * 400);
+
+  if (roll < 0.35) {
+    f.skipped += 1;
+    f.recent.unshift({
+      at: new Date().toISOString(),
+      action: 'skip',
+      token_address: mintFor(spec.symbol),
+      token_symbol: spec.symbol,
+      detail: usd < 25
+        ? `swap is $${usd.toFixed(2)}, below FOMO_MIN_SWAP_USD $25.00`
+        : 'already hold this token (no pyramiding)',
+    });
+    return;
+  }
+
+  if (roll < 0.75) {
+    const refusal = checkEntry(mintFor(spec.symbol));
+    if (refusal) {
+      f.failed += 1;
+      f.recent.unshift({
+        at: new Date().toISOString(),
+        action: 'failed',
+        token_address: mintFor(spec.symbol),
+        token_symbol: spec.symbol,
+        detail: `risk guard refused copied entry: ${refusal}`,
+      });
+      return;
+    }
+    openPosition(spec, Number(process.env.FOMO_COPY_SIZE_SOL) || 0.05);
+    f.mirrored += 1;
+    f.recent.unshift({
+      at: new Date().toISOString(),
+      action: 'buy',
+      token_address: mintFor(spec.symbol),
+      token_symbol: spec.symbol,
+      detail: `${(Number(process.env.FOMO_COPY_SIZE_SOL) || 0.05).toFixed(4)} SOL — copied buy BUY ${spec.symbol} ($${usd.toFixed(2)})`,
+    });
+    return;
+  }
+
+  const mine = state.positions.filter((p) => p.status === 'active');
+  const victim = mine[Math.floor(Math.random() * mine.length)];
+  if (victim) {
+    closePosition(victim, 'manual_close');
+    f.mirrored += 1;
+    f.recent.unshift({
+      at: new Date().toISOString(),
+      action: 'sell',
+      token_address: victim.token_address,
+      token_symbol: victim.token_symbol,
+      detail: 'closed 1 position(s) — copied trader sold SELL ' + victim.token_symbol,
+    });
+  } else {
+    f.skipped += 1;
+    f.recent.unshift({
+      at: new Date().toISOString(),
+      action: 'skip',
+      token_address: mintFor(spec.symbol),
+      token_symbol: spec.symbol,
+      detail: 'copied trader sold, but we hold nothing in this token',
+    });
+  }
+  f.recent = f.recent.slice(0, 50);
+}
+
 function log(message) {
   const line = `${new Date().toISOString()}  ${message}`;
   state.log.unshift(line);
@@ -285,6 +378,8 @@ function tick() {
   }
 
   broadcast({ type: 'price_update', data: { positions: activePositions().length } });
+
+  fomoTick();
 
   // Occasionally open a new position when the rails allow it.
   if (state.positions.filter((p) => p.status === 'active').length < 3 && Math.random() < 0.25) {
@@ -392,7 +487,7 @@ function riskStatusResponse() {
 // ---------------------------------------------------------------------------
 // Routing
 // ---------------------------------------------------------------------------
-function route(req, res, url) {
+function route(req, res, url, body) {
   const send = (status, body) => {
     const payload = JSON.stringify(body, null, 2);
     res.writeHead(status, {
@@ -510,6 +605,94 @@ function route(req, res, url) {
         halted: true,
         flatten_requested: flatten,
         positions_closed: closed,
+      });
+    }
+
+    case '/api/fomo/status': {
+      const f = state.fomo;
+      return send(200, {
+        provider: f.provider,
+        base_url: f.base_url,
+        enabled: process.env.FOMO_ENABLED !== 'false',
+        mode: config.demo_mode ? 'demo' : 'live',
+        window: f.window,
+        running: state.running,
+        target: {
+          clan_id: f.clan.id,
+          clan_name: f.clan.name,
+          clan_pnl_usd: f.clan.pnl_usd,
+          clan_member_count: f.clan.member_count,
+          trader_user_id: f.trader.user_id,
+          trader_handle: f.trader.handle,
+          trader_display_name: f.trader.display_name,
+          trader_pnl_usd: f.trader.pnl_usd,
+          trader_verified: f.trader.verified,
+        },
+        last_discovery: f.last_discovery,
+        last_poll: f.last_poll,
+        mirrored: f.mirrored,
+        skipped: f.skipped,
+        failed: f.failed,
+        last_error: f.last_error,
+        recent: f.recent.slice(0, 20),
+        limits: {
+          copy_size_sol: Number(process.env.FOMO_COPY_SIZE_SOL) || 0.05,
+          size_mode: process.env.FOMO_SIZE_MODE || 'fixed',
+          copy_ratio: Number(process.env.FOMO_COPY_RATIO) || 0.02,
+          min_swap_usd: Number(process.env.FOMO_MIN_SWAP_USD) || 25,
+          max_positions: Number(process.env.FOMO_MAX_POSITIONS) || 5,
+          mirror_sells: process.env.FOMO_MIRROR_SELLS !== 'false',
+          refresh_secs: Number(process.env.FOMO_REFRESH_SECS) || 86400,
+          poll_secs: Number(process.env.FOMO_POLL_SECS) || 60,
+        },
+      });
+    }
+
+    case '/api/fomo/refresh':
+      // Simulate rediscovery: occasionally pick a different clan leader.
+      if (Math.random() < 0.5) {
+        const clans = [
+          { id: 'clan-conviction', name: 'Conviction Capital', pnl_usd: 772254.03, member_count: 22 },
+          { id: 'clan-control', name: 'Control', pnl_usd: 437800.0, member_count: 10 },
+          { id: 'clan-rexxx', name: 'REXXXMAXXING', pnl_usd: 261839.38, member_count: 27 },
+        ];
+        const traders = [
+          { user_id: 'u-1', handle: 'MrMetavers3', display_name: 'MrMetavers3', pnl_usd: 454800.0, verified: true },
+          { user_id: 'u-2', handle: 'PoorGoat_', display_name: 'PoorGoat', pnl_usd: 88400.0, verified: false },
+          { user_id: 'u-3', handle: 'casperex', display_name: 'casper', pnl_usd: 72300.0, verified: true },
+        ];
+        state.fomo.clan = clans[Math.floor(Math.random() * clans.length)];
+        state.fomo.trader = traders[Math.floor(Math.random() * traders.length)];
+      }
+      state.fomo.last_discovery = new Date().toISOString();
+      log(`FOMO copy target refreshed: clan=${state.fomo.clan.name} trader=@${state.fomo.trader.handle}`);
+      return send(200, { success: true, message: `Copying @${state.fomo.trader.handle} (top member of ${state.fomo.clan.name})` });
+
+    case '/api/fomo/target': {
+      if (body && body.trader) {
+        state.fomo.trader = {
+          user_id: 'pinned',
+          handle: String(body.trader),
+          display_name: String(body.trader),
+          pnl_usd: 0,
+          verified: false,
+        };
+      }
+      if (body && body.clan_id) {
+        state.fomo.clan = { id: String(body.clan_id), name: String(body.clan_id), pnl_usd: 0, member_count: null };
+      }
+      if (!body || (!body.trader && !body.clan_id)) {
+        state.fomo.trader = { user_id: 'u-1', handle: 'MrMetavers3', display_name: 'MrMetavers3', pnl_usd: 454800.0, verified: true };
+        state.fomo.clan = { id: 'clan-conviction', name: 'Conviction Capital', pnl_usd: 772254.03, member_count: 22 };
+      }
+      log(`FOMO copy target pinned: clan=${state.fomo.clan.name} trader=@${state.fomo.trader.handle}`);
+      return send(200, {
+        success: true,
+        message: (body && body.trader)
+          ? `Copying trader @${body.trader}`
+          : (body && body.clan_id)
+            ? `Copying clan ${body.clan_id}`
+            : 'FOMO copy pins cleared — back to automatic discovery',
       });
     }
 
@@ -784,8 +967,26 @@ function pushSnapshot(target) {
 // ---------------------------------------------------------------------------
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  if (url.pathname.startsWith('/api/')) return route(req, res, url);
-  return serveStatic(res, url.pathname);
+  if (!url.pathname.startsWith('/api/')) return serveStatic(res, url.pathname);
+
+  // Collect the body for mutating methods so route() can read JSON payloads.
+  if (req.method === 'GET' || req.method === 'DELETE' || req.method === 'HEAD') {
+    return route(req, res, url, null);
+  }
+  let chunks = '';
+  req.on('data', (chunk) => {
+    chunks += chunk;
+    if (chunks.length > 1_000_000) req.destroy();
+  });
+  req.on('end', () => {
+    let body = null;
+    try {
+      body = chunks ? JSON.parse(chunks) : null;
+    } catch (e) {
+      body = null;
+    }
+    route(req, res, url, body);
+  });
 });
 
 server.on('upgrade', (req, socket) => {

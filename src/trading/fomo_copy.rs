@@ -938,9 +938,10 @@ mod tests {
             other => panic!("expected buy, got {other:?}"),
         }
 
-        // $10 notional → 0.05 SOL → half = 0.025, under the cap
-        match decide(&signal(SwapSide::Buy, 10.0, "s2"), &context) {
-            MirrorDecision::Buy { size_sol, .. } => assert!((size_sol - 0.025).abs() < 1e-9),
+        // $40 notional → 0.2 SOL → half = 0.1, comfortably under the cap.
+        // (Anything below FOMO_MIN_SWAP_USD is skipped as dust — separate test.)
+        match decide(&signal(SwapSide::Buy, 40.0, "s2"), &context) {
+            MirrorDecision::Buy { size_sol, .. } => assert!((size_sol - 0.1).abs() < 1e-9),
             other => panic!("expected buy, got {other:?}"),
         }
     }
