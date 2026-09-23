@@ -49,8 +49,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-verify-
 
+      # Compiler output is echoed back as check-run annotations: raw job logs
+      # live on Azure Blob, which restricted networks (e.g. an agent sandbox)
+      # cannot download, but annotations are readable through the REST API.
       - name: cargo check (all targets)
-        run: cargo check --all-targets --locked
+        run: |
+          set +e
+          cargo check --all-targets --locked 2>&1 | tee /tmp/cargo-check.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "::error::cargo check failed (exit $status) — digest below"
+            grep -aE "^error(\[|:)|^warning: unused|--> |cannot find|expected|help: " /tmp/cargo-check.log \
+              | head -60 \
+              | while IFS= read -r line; do
+                  clean=$(printf '%s' "$line" | tr -d '\r' | sed 's/%/%25/g')
+                  echo "::error::${clean}"
+                done
+            exit "$status"
+          fi
 
       # Test output is echoed back as check-run annotations: raw job logs live on
       # Azure Blob, which some restricted networks (e.g. an agent sandbox) cannot
