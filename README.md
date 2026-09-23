@@ -15,6 +15,9 @@ An autonomous trading bot for Solana memecoins with REST API, web dashboard, and
 - **Risk Analysis**: Evaluates tokens for common risks (mint/freeze authority, LP status, honeypot, holder concentration)
 - **Position Management**: Automatic take profit, stop loss, and trailing stop loss
 - **Demo Mode**: Simulate trading without executing real transactions
+- **Risk Guard**: Daily loss cap, max-drawdown breaker, losing-streak pause, per-token cooldown and a kill switch that block new entries (never exits)
+- **API-key Auth**: Every endpoint except `/api/health` can require an `X-API-Key`
+- **FOMO leaderboard copy**: Finds the top clan on fomo.family, takes its top member, and mirrors their Solana swaps — see [docs/FOMO_COPY_TRADING.md](docs/FOMO_COPY_TRADING.md)
 
 ## Architecture
 
@@ -88,6 +91,12 @@ See `.env.example` for all options.
 | `/api/autotrader/start` | POST | Start trading |
 | `/api/autotrader/stop` | POST | Stop trading |
 | `/api/signals` | GET | Trade signals |
+| `/api/risk/status` | GET | Portfolio safety rails: daily loss, drawdown, cooldowns, halted? |
+| `/api/risk/reset` | POST | Clear a halt (daily-loss pause, drawdown breaker, kill switch) |
+| `/api/emergency/stop` | POST | Kill switch — block entries, optionally flatten everything, stop trading |
+| `/api/fomo/status` | GET | FOMO copy target (top clan → top member), counters, recent decisions |
+| `/api/fomo/refresh` | POST | Re-run leaderboard discovery now |
+| `/api/fomo/target` | POST | Pin a clan id or trader handle to copy |
 | `/api/copy/register` | POST | Register for copy trading |
 | `/ws` | WebSocket | Real-time updates |
 

@@ -70,7 +70,8 @@ To pull future upstream changes: `git remote add upstream https://github.com/ton
 
 | Track | State | Notes |
 |-------|-------|-------|
-| **A — Safety & risk controls** | ✅ implemented (`arena/01a0d052-meme`) | see §6 for the API; verified by CI (`cargo check --all-targets` + `cargo test`, 61 tests) |
+| **A — Safety & risk controls** | ✅ implemented | see §6 for the API; verified by CI (`cargo check --all-targets` + `cargo test`, 84 tests) |
+| **F — FOMO leaderboard copy** | ✅ implemented | new `FomoCopy` strategy: top clan → top member → mirror their swaps. See [FOMO_COPY_TRADING.md](FOMO_COPY_TRADING.md) |
 | B — Smarter exits | ⬜ next | laddered TP, breakeven stop, trailing activation threshold, momentum/time exits |
 | C — Alerts & analytics | ⬜ planned | Discord/Telegram/webhook alerts, trade journal + CSV export, richer stats |
 | D — Entry & discovery | ⬜ planned | dev-wallet/bundle detection, dynamic priority fees, Jito tips, copy-trade fan-out |
@@ -123,3 +124,27 @@ node tools/dev-harness/server.js     # http://localhost:8080 — mock backend + 
 ```
 
 See `tools/dev-harness/README.md`.
+
+## 7. Track F — FOMO leaderboard copy-trading
+
+Full guide: **[FOMO_COPY_TRADING.md](FOMO_COPY_TRADING.md)**.
+
+What it does, once a day (configurable): reads fomo.family's **clan leaderboard**,
+takes rank 1, reads that clan's **members**, takes rank 1 by PnL, then polls that
+trader's swaps and mirrors them (buy → entry, sell → exit). Runs in live,
+dry-run **and demo** mode; every copied entry passes the Track A risk guard.
+
+| Piece | Where |
+|---|---|
+| Data client (3 providers, tolerant parsing) | `src/api/fomo.rs` |
+| Discovery + mirror engine, pure `decide()` | `src/trading/fomo_copy.rs` |
+| Strategy type `FomoCopy` + factory defaults | `src/trading/strategy.rs` |
+| Dashboard card | `webapp/js/fomo.js` |
+| Host-probe tool (run this first) | `tools/fomo-probe.js` |
+| API | `GET /api/fomo/status`, `POST /api/fomo/refresh`, `POST /api/fomo/target` |
+
+**Important constraint:** fomo.family has no public API and Cloudflare blocks most
+non-browser clients (HTTP 430) from datacentres, so the bot supports three data
+sources (`official`, `fomoapi` mirror, `custom` proxy) and lets you pin a clan or
+trader by hand. Run `node tools/fomo-probe.js` on the VPS to see what your host
+can reach.
