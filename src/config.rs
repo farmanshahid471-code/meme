@@ -35,6 +35,17 @@ pub struct Config {
     pub api_port: Option<u16>,
     pub cors_origins: Vec<String>,
     pub auto_start_trading: bool,
+    /// Shared secret required on every mutating API call. `None`/empty = auth disabled (warns at boot).
+    pub api_key: Option<String>,
+
+    // Risk Guard (portfolio-level safety rails)
+    pub daily_loss_limit_sol: Option<f64>,
+    pub max_drawdown_percent: Option<f64>,
+    pub max_trades_per_day: Option<u32>,
+    pub max_consecutive_losses: Option<u32>,
+    pub token_cooldown_minutes: u32,
+    /// When the kill switch fires, also market-sell every open position.
+    pub emergency_flatten_positions: bool,
 
     // Copy Trade Configuration
     pub treasury_wallet: Option<String>,
@@ -122,6 +133,27 @@ impl Config {
             auto_start_trading: env::var("AUTO_START_TRADING")
                 .map(|v| v.to_lowercase() == "true")
                 .unwrap_or(false),
+            api_key: env::var("API_KEY")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
+
+            // Risk Guard
+            daily_loss_limit_sol: parse_optional_f64("DAILY_LOSS_LIMIT_SOL"),
+            max_drawdown_percent: parse_optional_f64("MAX_DRAWDOWN_PERCENT"),
+            max_trades_per_day: env::var("MAX_TRADES_PER_DAY")
+                .ok()
+                .and_then(|v| v.trim().parse().ok()),
+            max_consecutive_losses: env::var("MAX_CONSECUTIVE_LOSSES")
+                .ok()
+                .and_then(|v| v.trim().parse().ok()),
+            token_cooldown_minutes: env::var("TOKEN_COOLDOWN_MINUTES")
+                .unwrap_or_else(|_| "0".to_string())
+                .parse()
+                .unwrap_or(0),
+            emergency_flatten_positions: env::var("EMERGENCY_FLATTEN_POSITIONS")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
 
             // Copy Trade Configuration
             treasury_wallet: env::var("TREASURY_WALLET").ok(),
@@ -187,4 +219,15 @@ impl Config {
                 .context("Failed to parse DEFAULT_PRIORITY_FEE_MICRO_LAMPORTS")?,
         })
     }
+}
+
+/// Parse an optional positive float env var. Empty, unparseable, zero or
+/// negative values all mean "rail disabled", which is safer than guessing.
+fn parse_optional_f64(key: &str) -> Option<f64> {
+    env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
 }

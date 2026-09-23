@@ -16,6 +16,7 @@ use crate::config::Config;
 use crate::error::TraderbotError;
 use crate::solana::client::SolanaClient;
 use crate::solana::wallet::WalletManager;
+use crate::trading::risk_guard::RiskGuard;
 
 const POSITIONS_FILE: &str = "data/positions.json"; // Define persistence file path
 
@@ -99,6 +100,8 @@ pub struct PositionManager {
     config: Arc<Config>,
     task_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     persistence_path: PathBuf,
+    /// Portfolio-level safety rails (daily loss cap, drawdown breaker, cooldowns).
+    risk_guard: Arc<RiskGuard>,
 }
 
 impl PositionManager {
@@ -107,6 +110,7 @@ impl PositionManager {
         jupiter_client: Arc<JupiterClient>,
         solana_client: Arc<SolanaClient>,
         config: Arc<Config>,
+        risk_guard: Arc<RiskGuard>,
     ) -> Self {
         let persistence_path = PathBuf::from(POSITIONS_FILE);
         Self {
@@ -118,7 +122,15 @@ impl PositionManager {
             config,
             task_handle: Arc::new(Mutex::new(None)),
             persistence_path,
+            risk_guard,
         }
+    }
+
+    /// Shared handle to the portfolio risk guard, so callers that execute swaps
+    /// outside this manager (scan cycle, Telegram sniper) can gate entries
+    /// *before* any SOL leaves the wallet.
+    pub fn risk_guard(&self) -> Arc<RiskGuard> {
+        self.risk_guard.clone()
     }
 
     // --- Persistence ---
@@ -315,6 +327,10 @@ impl PositionManager {
 
         self.save_positions().await?;
 
+        // Count the fill against the daily entry quota. Safe to do after the
+        // swap landed: the rail must never block booking a position we own.
+        self.risk_guard.record_entry().await;
+
         Ok(position)
     }
 
@@ -470,6 +486,21 @@ impl PositionManager {
         drop(positions); // Release lock before saving
 
         self.save_positions().await?;
+
+        // Feed the realised result into the portfolio risk guard. This is where
+        // the daily-loss / drawdown / losing-streak rails actually fire.
+        let halt = self
+            .risk_guard
+            .record_exit(&closed_position.token_address, pnl_sol)
+            .await;
+        if let Some(halt) = halt {
+            warn!(
+                "🛑 Risk guard tripped by the {} rail: {} — new entries are blocked",
+                halt.kind.as_str(),
+                halt.reason
+            );
+        }
+
         Ok(closed_position)
     }
 
@@ -836,6 +867,48 @@ impl PositionManager {
     }
 
     // Changed to take &Position to avoid moving the value
+    /// Kill-switch path: market-sell every open position right now.
+    ///
+    /// Unlike the scheduled exits this ignores SL/TP state and ignores price
+    /// staleness — the operator asked for out. Positions already in `Closing`
+    /// are skipped so a pending sell is never sent twice. Returns how many
+    /// positions were closed; failures are logged and left open.
+    pub async fn emergency_close_all(&self) -> Result<usize> {
+        let active: Vec<Position> = {
+            let positions = self.positions.read().await;
+            positions
+                .values()
+                .filter(|p| p.status == PositionStatus::Active)
+                .cloned()
+                .collect()
+        };
+
+        if active.is_empty() {
+            info!("Emergency flatten requested, but there are no open positions.");
+            return Ok(0);
+        }
+
+        let attempted = active.len();
+        warn!("🚨 Emergency flatten: attempting to close {} open position(s)...", attempted);
+
+        let mut closed = 0usize;
+        for position in active {
+            match self
+                .execute_exit(&position, PositionStatus::EmergencyClose)
+                .await
+            {
+                Ok(_) => closed += 1,
+                Err(e) => error!(
+                    "Emergency close FAILED for {} ({}): {:?} — position left open",
+                    position.token_symbol, position.id, e
+                ),
+            }
+        }
+
+        warn!("🚨 Emergency flatten finished: {}/{} position(s) closed", closed, attempted);
+        Ok(closed)
+    }
+
     async fn execute_exit(&self, position: &Position, reason: PositionStatus) -> Result<()> {
         info!(
             "Executing exit for position {} ({}) due to: {}",

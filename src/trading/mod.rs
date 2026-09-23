@@ -9,8 +9,10 @@ pub mod graduation_monitor;
 pub mod watchlist;
 pub mod scanner;
 pub mod sniper;
+pub mod risk_guard;
 // Potentially add order types, execution logic, etc. here later
 
+pub use risk_guard::{ActiveHalt, HaltKind, RiskGuard, RiskGuardState, RiskLimits};
 pub use simulation::SimulationManager;
 pub use pumpfun::{PumpfunToken, PumpCreateEvent, BondingCurveState};
 pub use pumpfun_monitor::{PumpfunMonitor, PumpfunMonitorConfig, MonitorStats};

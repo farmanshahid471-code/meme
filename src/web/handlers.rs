@@ -1353,3 +1353,139 @@ pub async fn get_watchlist_stats(
         max_capacity: stats.max_capacity,
     }))
 }
+
+// ============================================================================
+// Risk Guard & Kill Switch
+// ============================================================================
+
+/// Snapshot of the portfolio safety rails: what is blocked, and why.
+pub async fn get_risk_status(State(state): State<AppState>) -> Json<RiskStatusResponse> {
+    let snapshot = state.risk_guard.snapshot().await;
+    let limits = state.risk_guard.limits();
+
+    let now = Utc::now();
+    let cooldown = chrono::Duration::minutes(limits.token_cooldown_minutes as i64);
+    let mut tokens_in_cooldown: Vec<CooldownEntry> = snapshot
+        .last_exit_by_token
+        .iter()
+        .filter_map(|(token, last_exit)| {
+            if limits.token_cooldown_minutes == 0 {
+                return None;
+            }
+            let remaining = cooldown - now.signed_duration_since(*last_exit);
+            (remaining.num_seconds() > 0).then(|| CooldownEntry {
+                token_address: token.clone(),
+                remaining_seconds: remaining.num_seconds(),
+            })
+        })
+        .collect();
+    tokens_in_cooldown.sort_by_key(|entry| -entry.remaining_seconds);
+
+    Json(RiskStatusResponse {
+        halted: snapshot.halt.is_some(),
+        halt_kind: snapshot.halt.as_ref().map(|h| h.kind.as_str().to_string()),
+        halt_reason: snapshot.halt.as_ref().map(|h| h.reason.clone()),
+        halted_since: snapshot.halt.as_ref().map(|h| h.since),
+        day: snapshot.day.to_string(),
+        realized_pnl_today_sol: snapshot.realized_pnl_today_sol,
+        realized_pnl_total_sol: snapshot.realized_pnl_total_sol,
+        equity_sol: snapshot.equity_sol,
+        peak_equity_sol: snapshot.peak_equity_sol,
+        trades_today: snapshot.trades_today,
+        trades_total: snapshot.trades_total,
+        wins: snapshot.wins,
+        losses: snapshot.losses,
+        consecutive_losses: snapshot.consecutive_losses,
+        entry_refusals: snapshot.entry_refusals,
+        limits: RiskLimitsResponse {
+            daily_loss_limit_sol: limits.daily_loss_limit_sol,
+            max_drawdown_percent: limits.max_drawdown_percent,
+            max_trades_per_day: limits.max_trades_per_day,
+            max_consecutive_losses: limits.max_consecutive_losses,
+            token_cooldown_minutes: limits.token_cooldown_minutes,
+            starting_equity_sol: limits.starting_equity_sol,
+        },
+        tokens_in_cooldown,
+    })
+}
+
+/// Clear a halt so trading can resume. Use after a daily-loss pause, a drawdown
+/// breaker, or the kill switch.
+pub async fn reset_risk_guard(
+    State(state): State<AppState>,
+    Query(query): Query<RiskResetQuery>,
+) -> Json<RiskResetResponse> {
+    let clear_counters = query.clear_counters.unwrap_or(false);
+    let snapshot = state.risk_guard.reset(clear_counters).await;
+
+    info!(
+        "Risk guard reset via API (clear_counters={}, halted={})",
+        clear_counters,
+        snapshot.halt.is_some()
+    );
+
+    Json(RiskResetResponse {
+        success: true,
+        message: if clear_counters {
+            "Risk guard reset and today's counters cleared".to_string()
+        } else {
+            "Risk guard reset — new entries allowed again".to_string()
+        },
+        halted: snapshot.halt.is_some(),
+    })
+}
+
+/// Kill switch: block every new entry immediately, optionally liquidate open
+/// positions, and stop the trading loops.
+pub async fn emergency_stop(
+    State(state): State<AppState>,
+    Query(query): Query<EmergencyStopQuery>,
+) -> Result<Json<EmergencyStopResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let flatten = query
+        .flatten
+        .unwrap_or(state.config.emergency_flatten_positions);
+    let reason = query
+        .reason
+        .clone()
+        .unwrap_or_else(|| "operator pressed the kill switch".to_string());
+
+    warn!(
+        "🚨 /api/emergency/stop received (flatten={}): {}",
+        flatten, reason
+    );
+
+    let auto_trader = state.auto_trader.lock().await;
+    let outcome = auto_trader.emergency_halt(&reason, flatten).await;
+    drop(auto_trader);
+
+    // Either way the bot is no longer running; tell the dashboard immediately.
+    state.broadcast(WsMessage::StatusChange {
+        running: false,
+        timestamp: Utc::now(),
+    });
+
+    match outcome {
+        Ok(closed) => Ok(Json(EmergencyStopResponse {
+            success: true,
+            message: format!(
+                "Kill switch engaged. {} position(s) closed. New entries stay blocked until POST /api/risk/reset.",
+                closed
+            ),
+            halted: true,
+            flatten_requested: flatten,
+            positions_closed: closed,
+        })),
+        Err(e) => {
+            error!("Kill switch stopped the trader with an error: {:?}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error:
+                        "Kill switch engaged, but the AutoTrader did not stop cleanly. Entries are still blocked."
+                            .to_string(),
+                    details: Some(e.to_string()),
+                }),
+            ))
+        }
+    }
+}

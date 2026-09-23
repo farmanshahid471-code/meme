@@ -21,6 +21,7 @@ use crate::solana::wallet::WalletManager;
 use crate::config::Config;
 use crate::trading::position::PositionManager;
 use crate::trading::risk::{RiskAnalysis, RiskAnalyzer};
+use crate::trading::risk_guard::{HaltKind, RiskGuard};
 use crate::trading::strategy::Strategy;
 use crate::trading::simulation::SimulationManager;
 use crate::trading::pumpfun::{PumpfunToken, BondingCurveState};
@@ -325,6 +326,16 @@ async fn execute_buy_task(
         token.symbol, token.address, strategy.name
     );
 
+    // --- Risk guard: refuse the entry BEFORE any SOL leaves the wallet ------
+    // This is the last line of defence for every automated entry path.
+    if let Err(reason) = position_manager.risk_guard().check_entry(&token.address).await {
+        warn!(
+            "🛑 Entry refused for {} ({}): {}",
+            token.symbol, token.address, reason
+        );
+        return Err(anyhow!("Risk guard refused entry for {}: {}", token.symbol, reason));
+    }
+
     // Determine position size based on strategy (consider risk adjustment?)
     let position_size_sol = strategy.max_position_size_sol; // Simple for now
     // TODO: Add risk-adjusted position sizing?
@@ -441,6 +452,8 @@ pub struct AutoTrader {
     pub position_manager: Arc<PositionManager>, // Expose for references
     pub risk_analyzer: Arc<RiskAnalyzer>, // Expose for /analyze commands
     pub simulation_manager: Option<Arc<SimulationManager>>, // For DRY_RUN_MODE
+    /// Portfolio-level safety rails — gates every new entry (see `risk_guard.rs`).
+    pub risk_guard: Arc<RiskGuard>,
     is_running: Arc<AtomicBool>,
     // notification_tx will be used for WebSocket broadcasts in future
     // notification_tx: Option<broadcast::Sender<WsMessage>>,
@@ -496,12 +509,37 @@ impl AutoTrader {
             birdeye_client.clone(), // Pass BirdeyeClient
             wallet_manager.clone(), // Pass WalletManager to RiskAnalyzer::new
         ));
+        // Portfolio-level safety rails. Created before the position manager so
+        // every entry path (scan cycle, Moralis scanner, Telegram sniper) can
+        // consult the same instance.
+        let risk_guard = Arc::new(RiskGuard::from_config(&config));
+        if risk_guard.limits().daily_loss_limit_sol.is_none()
+            && risk_guard.limits().max_drawdown_percent.is_none()
+            && risk_guard.limits().max_trades_per_day.is_none()
+            && risk_guard.limits().max_consecutive_losses.is_none()
+            && risk_guard.limits().token_cooldown_minutes == 0
+        {
+            warn!(
+                "⚠️  Risk guard rails are ALL disabled — set DAILY_LOSS_LIMIT_SOL / MAX_DRAWDOWN_PERCENT / MAX_TRADES_PER_DAY / MAX_CONSECUTIVE_LOSSES / TOKEN_COOLDOWN_MINUTES"
+            );
+        } else {
+            info!(
+                "🛡️  Risk guard active: daily_loss={:?} max_drawdown={:?}% max_trades/day={:?} max_consecutive_losses={:?} cooldown={}min",
+                risk_guard.limits().daily_loss_limit_sol,
+                risk_guard.limits().max_drawdown_percent,
+                risk_guard.limits().max_trades_per_day,
+                risk_guard.limits().max_consecutive_losses,
+                risk_guard.limits().token_cooldown_minutes,
+            );
+        }
+
         let position_manager = Arc::new(PositionManager::new(
             wallet_manager.clone(),
             jupiter_client.clone(),
             solana_client.clone(),
             config.clone(),
-        )); // Corrected syntax: Ensure this parenthesis closes Arc::new
+            risk_guard.clone(),
+        ));
 
         // Initialize SimulationManager if dry_run_mode is enabled
         let simulation_manager = if config.dry_run_mode {
@@ -537,6 +575,7 @@ impl AutoTrader {
             position_manager,
             risk_analyzer,
             simulation_manager,
+            risk_guard,
             is_running: Arc::new(AtomicBool::new(false)),
             strategies: Arc::new(RwLock::new(HashMap::new())), // Start with empty map, will load in init
             running: Arc::new(RwLock::new(false)),
@@ -1339,6 +1378,35 @@ impl AutoTrader {
 
         info!("AutoTrader started successfully");
         Ok(())
+    }
+
+    /// Operator kill switch: block every new entry immediately, then (optionally)
+    /// liquidate open positions and stop the trading loops.
+    ///
+    /// The halt is applied *first* so no scanner thread can slip a buy in while
+    /// the flatten is running.
+    pub async fn emergency_halt(&self, reason: &str, flatten: bool) -> Result<usize> {
+        let halt = self.risk_guard.halt(HaltKind::Manual, reason).await;
+        warn!(
+            "🚨 KILL SWITCH ENGAGED: {} (since {}) — new entries are blocked",
+            halt.reason, halt.since
+        );
+
+        let mut closed = 0usize;
+        if flatten {
+            closed = self.position_manager.emergency_close_all().await?;
+        }
+
+        if let Err(e) = self.stop().await {
+            warn!("Kill switch: AutoTrader did not stop cleanly: {:?}", e);
+            return Err(e);
+        }
+
+        warn!(
+            "🚨 Kill switch complete: {} position(s) closed. Entries stay blocked until POST /api/risk/reset",
+            closed
+        );
+        Ok(closed)
     }
 
     pub async fn stop(&self) -> Result<()> {

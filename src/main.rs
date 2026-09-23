@@ -68,6 +68,10 @@ async fn main() -> Result<()> {
     ).await?;
     info!("AutoTrader initialized");
 
+    // Keep a shared handle to the portfolio risk guard so the API can report on
+    // it (and drive the kill switch) without locking the AutoTrader.
+    let risk_guard = auto_trader.risk_guard.clone();
+
     // Wrap AutoTrader in Arc<Mutex> for shared access
     let auto_trader = Arc::new(Mutex::new(auto_trader));
 
@@ -154,6 +158,7 @@ async fn main() -> Result<()> {
         wallet_manager,
         solana_client,
         config.clone(),
+        risk_guard,
     );
 
     // Initialize async components (copy trade manager, etc.)

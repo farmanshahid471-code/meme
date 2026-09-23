@@ -3,6 +3,31 @@
  * Handles all HTTP communication with the Rust backend
  */
 
+/**
+ * The bot's REST API requires an API key when API_KEY is set on the backend.
+ * Stored in localStorage so it survives reloads; sent as X-API-Key (and as
+ * ?api_key= for the WebSocket, which cannot carry headers).
+ */
+function getApiKey() {
+    try {
+        return localStorage.getItem('tony_api_key') || '';
+    } catch (e) {
+        return '';
+    }
+}
+
+function setApiKey(key) {
+    try {
+        if (key) {
+            localStorage.setItem('tony_api_key', key);
+        } else {
+            localStorage.removeItem('tony_api_key');
+        }
+    } catch (e) {
+        console.warn('[API] Could not persist API key:', e);
+    }
+}
+
 const API = {
     // Configuration
     baseUrl: null,
@@ -61,6 +86,9 @@ const API = {
         const defaultOptions = {
             headers: {
                 'Content-Type': 'application/json',
+                // API key for the bot's auth middleware (set it in the dashboard
+                // settings, or via localStorage.setItem('tony_api_key', '...')).
+                ...(getApiKey() ? { 'X-API-Key': getApiKey() } : {}),
             },
         };
 

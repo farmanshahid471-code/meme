@@ -44,7 +44,16 @@ const WebSocketClient = {
             this.url = 'ws://127.0.0.1:3000/ws';
         } else {
             // Production - use Railway backend directly (Vercel can't proxy WebSocket)
-            this.url = window.WS_URL || 'wss://trader-tony.up.railway.app/ws';
+            let wsUrl = window.WS_URL || 'wss://trader-tony.up.railway.app/ws';
+            // Browsers cannot set headers on WebSocket handshakes, so the bot
+            // also accepts the key as a query parameter.
+            try {
+                const key = localStorage.getItem('tony_api_key');
+                if (key) {
+                    wsUrl += (wsUrl.includes('?') ? '&' : '?') + 'api_key=' + encodeURIComponent(key);
+                }
+            } catch (e) { /* localStorage unavailable */ }
+            this.url = wsUrl;
         }
 
         console.log(`[WebSocket] Initialized with URL: ${this.url}`);

@@ -49,6 +49,11 @@ pub fn create_routes(state: AppState) -> Router {
         .route("/api/autotrader/start", post(handlers::start_autotrader))
         .route("/api/autotrader/stop", post(handlers::stop_autotrader))
 
+        // Risk guard (daily loss cap, drawdown breaker, cooldowns, kill switch)
+        .route("/api/risk/status", get(handlers::get_risk_status))
+        .route("/api/risk/reset", post(handlers::reset_risk_guard))
+        .route("/api/emergency/stop", post(handlers::emergency_stop))
+
         // Token analysis
         .route("/api/analyze", post(handlers::analyze_token))
 

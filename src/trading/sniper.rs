@@ -248,6 +248,14 @@ impl Sniper {
             return Ok(());
         }
 
+        // --- RISK GUARD ---
+        // The portfolio rails (kill switch, daily loss cap, drawdown breaker,
+        // per-token cooldown) gate snipes exactly like they gate the scanners.
+        if let Err(reason) = self.position_manager.risk_guard().check_entry(mint).await {
+            warn!("🛑 Snipe aborted for {} — risk guard: {}", mint, reason);
+            return Ok(());
+        }
+
         info!(
             "🚨 SNIPE FIRING: trigger={} ticker={} mint={} amount={} SOL slippage={}bps",
             signal.trigger, symbol_for_log, mint, amount_sol, slippage_bps

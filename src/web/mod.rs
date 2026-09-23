@@ -5,6 +5,7 @@
 
 pub mod server;
 pub mod routes;
+pub mod auth;
 pub mod handlers;
 pub mod websocket;
 pub mod models;
@@ -36,6 +37,8 @@ pub struct AppState {
     pub ws_tx: broadcast::Sender<WsMessage>,
     /// Copy trade manager for handling copy trading functionality
     pub copy_trade_manager: Arc<CopyTradeManager>,
+    /// Portfolio-level risk guard (daily loss cap, drawdown breaker, kill switch)
+    pub risk_guard: Arc<crate::trading::risk_guard::RiskGuard>,
 }
 
 impl AppState {
@@ -45,6 +48,7 @@ impl AppState {
         wallet_manager: Arc<WalletManager>,
         solana_client: Arc<SolanaClient>,
         config: Arc<Config>,
+        risk_guard: Arc<crate::trading::risk_guard::RiskGuard>,
     ) -> Self {
         // Create broadcast channel for WebSocket messages (capacity of 100 messages)
         let (ws_tx, _) = broadcast::channel(100);
@@ -59,6 +63,7 @@ impl AppState {
             config,
             ws_tx,
             copy_trade_manager,
+            risk_guard,
         }
     }
 

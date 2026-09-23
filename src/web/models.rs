@@ -415,3 +415,83 @@ pub struct WatchlistStatsResponse {
     pub migrated_tokens: usize,
     pub max_capacity: usize,
 }
+
+// ============================================================================
+// Risk Guard & Kill Switch
+// ============================================================================
+
+/// Response for `GET /api/risk/status`.
+#[derive(Debug, Serialize)]
+pub struct RiskStatusResponse {
+    /// True when new entries are blocked right now.
+    pub halted: bool,
+    pub halt_kind: Option<String>,
+    pub halt_reason: Option<String>,
+    pub halted_since: Option<DateTime<Utc>>,
+    /// UTC day the daily counters belong to.
+    pub day: String,
+    pub realized_pnl_today_sol: f64,
+    pub realized_pnl_total_sol: f64,
+    pub equity_sol: f64,
+    pub peak_equity_sol: f64,
+    pub trades_today: u32,
+    pub trades_total: u64,
+    pub wins: u64,
+    pub losses: u64,
+    pub consecutive_losses: u32,
+    /// How many entries the rails refused since start.
+    pub entry_refusals: u64,
+    pub limits: RiskLimitsResponse,
+    /// Mints still inside their post-exit cooldown window.
+    pub tokens_in_cooldown: Vec<CooldownEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RiskLimitsResponse {
+    pub daily_loss_limit_sol: Option<f64>,
+    pub max_drawdown_percent: Option<f64>,
+    pub max_trades_per_day: Option<u32>,
+    pub max_consecutive_losses: Option<u32>,
+    pub token_cooldown_minutes: u32,
+    pub starting_equity_sol: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CooldownEntry {
+    pub token_address: String,
+    pub remaining_seconds: i64,
+}
+
+/// Query for `POST /api/risk/reset`.
+#[derive(Debug, Deserialize)]
+pub struct RiskResetQuery {
+    /// Also zero today's loss/trade counters (default false).
+    #[serde(default)]
+    pub clear_counters: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RiskResetResponse {
+    pub success: bool,
+    pub message: String,
+    pub halted: bool,
+}
+
+/// Query for `POST /api/emergency/stop`.
+#[derive(Debug, Deserialize)]
+pub struct EmergencyStopQuery {
+    /// Override `EMERGENCY_FLATTEN_POSITIONS` for this call.
+    #[serde(default)]
+    pub flatten: Option<bool>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EmergencyStopResponse {
+    pub success: bool,
+    pub message: String,
+    pub halted: bool,
+    pub flatten_requested: bool,
+    pub positions_closed: usize,
+}
