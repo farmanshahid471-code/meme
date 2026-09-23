@@ -55,11 +55,12 @@ jobs:
       - name: cargo check (all targets)
         run: |
           set +e
-          cargo check --all-targets --locked 2>&1 | tee /tmp/cargo-check.log
+          cargo check --all-targets --locked --message-format short 2>&1 | tee /tmp/cargo-check.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             echo "::error::cargo check failed (exit $status) — digest below"
-            grep -aE "^error(\[|:)|^warning: unused|--> |cannot find|expected|help: " /tmp/cargo-check.log \
+            grep -aE "error|warning: unused" /tmp/cargo-check.log \
+              | grep -av "warning: unused manifest" \
               | head -60 \
               | while IFS= read -r line; do
                   clean=$(printf '%s' "$line" | tr -d '\r' | sed 's/%/%25/g')
