@@ -565,7 +565,13 @@ mod tests {
 
     #[test]
     fn drawdown_rail_trips_and_recovers() {
-        let l = RiskLimits { max_consecutive_losses: None, ..limits() };
+        // Isolate the drawdown rail: the daily-loss rail would fire first on a
+        // -0.30 SOL day otherwise (it is checked first, being day-scoped).
+        let l = RiskLimits {
+            max_consecutive_losses: None,
+            daily_loss_limit_sol: None,
+            ..limits()
+        };
         let mut s = fresh(&l);
         let now = Utc::now();
 
