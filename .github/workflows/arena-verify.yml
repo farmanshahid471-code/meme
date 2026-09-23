@@ -1,0 +1,62 @@
+# Fast verification workflow for feature branches (Arena).
+#
+# The upstream `ci.yml` only runs on `main`, which means feature branches never
+# get compiled. This workflow makes every push to a feature branch compile the
+# backend and run the unit tests, so breakage is caught in minutes.
+name: Verify
+
+on:
+  push:
+    branches-ignore:
+      - main
+      - master
+  pull_request:
+    branches: ['**']
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: cargo check + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-verify-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-verify-
+
+      - name: cargo check (all targets)
+        run: cargo check --all-targets --locked
+
+      - name: cargo test
+        run: cargo test --locked
+        env:
+          # Config::load() requires these; tests must not hit the real network.
+          SOLANA_RPC_URL: https://api.mainnet-beta.solana.com
+          HELIUS_API_KEY: test_key
+          WALLET_PRIVATE_KEY: 11111111111111111111111111111111
+        continue-on-error: false
