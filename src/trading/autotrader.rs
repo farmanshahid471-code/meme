@@ -1415,7 +1415,7 @@ impl AutoTrader {
             warn!("FOMO copy: initial discovery failed ({:?}) — will retry in the loop", e);
         }
 
-        let node = Arc::new(engine);
+        let node = engine; // build_fomo_engine already hands back an Arc
         {
             let mut slot = self.fomo_engine.lock().await;
             *slot = Some(node.clone());

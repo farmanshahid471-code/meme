@@ -841,12 +841,17 @@ fn parse_leg(row: &Value, prefix: &str) -> Option<FomoTokenLeg> {
         .unwrap_or(0.0);
 
     // `networkId` applies to the "in" leg; the "out" leg uses `outNetworkId`.
-    let network_id = if prefix == "token" {
-        string(row, &["networkId", "network_id"])
+    let network_keys: Vec<String> = if prefix == "token" {
+        vec!["networkId".to_string(), "network_id".to_string()]
     } else {
-        string(row, &[format!("{prefix}NetworkId"), "networkId".to_string()])
-            .or_else(|| string(row, &[format!("{prefix}NetworkId")]))
+        vec![
+            format!("{prefix}NetworkId"),
+            "networkId".to_string(),
+            format!("{prefix}Network"),
+        ]
     };
+    let network_keys: Vec<&str> = network_keys.iter().map(String::as_str).collect();
+    let network_id = string(row, &network_keys);
 
     Some(FomoTokenLeg {
         address,

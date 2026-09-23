@@ -186,6 +186,12 @@ impl Scanner {
                 debug!("TelegramCall strategy uses TG listener, not scanner");
                 Ok(vec![])
             }
+            StrategyType::FomoCopy => {
+                // Discovery happens in trading::fomo_copy (leaderboard -> clan
+                // -> member), so the token scanner intentionally does nothing.
+                debug!("FomoCopy strategy uses the fomo copy engine, not scanner");
+                Ok(vec![])
+            }
         }
     }
 
