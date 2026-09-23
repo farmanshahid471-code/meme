@@ -495,3 +495,78 @@ pub struct EmergencyStopResponse {
     pub flatten_requested: bool,
     pub positions_closed: usize,
 }
+
+// ============================================================================
+// FOMO Leaderboard Copy-Trading
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+pub struct FomoTargetResponse {
+    pub clan_id: Option<String>,
+    pub clan_name: Option<String>,
+    pub clan_pnl_usd: Option<f64>,
+    pub clan_member_count: Option<u32>,
+    pub trader_user_id: Option<String>,
+    pub trader_handle: Option<String>,
+    pub trader_display_name: Option<String>,
+    pub trader_pnl_usd: Option<f64>,
+    pub trader_verified: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FomoDecisionResponse {
+    pub at: DateTime<Utc>,
+    pub action: String,
+    pub token_address: String,
+    pub token_symbol: Option<String>,
+    pub detail: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FomoStatusResponse {
+    /// Upstream in use: `official` | `fomoapi` | `custom`.
+    pub provider: String,
+    pub base_url: String,
+    pub enabled: bool,
+    /// `demo` | `dry_run` | `live`.
+    pub mode: String,
+    pub window: String,
+    pub running: bool,
+    pub target: FomoTargetResponse,
+    pub last_discovery: Option<DateTime<Utc>>,
+    pub last_poll: Option<DateTime<Utc>>,
+    pub mirrored: u64,
+    pub skipped: u64,
+    pub failed: u64,
+    pub last_error: Option<String>,
+    pub recent: Vec<FomoDecisionResponse>,
+    pub limits: FomoLimitsResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FomoLimitsResponse {
+    pub copy_size_sol: f64,
+    pub size_mode: String,
+    pub copy_ratio: f64,
+    pub min_swap_usd: f64,
+    pub max_positions: u32,
+    pub mirror_sells: bool,
+    pub refresh_secs: u64,
+    pub poll_secs: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FomoTargetRequest {
+    /// Pin a clan id (or clear it with an empty string).
+    #[serde(default)]
+    pub clan_id: Option<String>,
+    /// Pin a trader handle (or clear it with an empty string).
+    #[serde(default)]
+    pub trader: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FomoActionResponse {
+    pub success: bool,
+    pub message: String,
+}

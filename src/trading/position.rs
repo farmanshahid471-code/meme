@@ -867,6 +867,46 @@ impl PositionManager {
     }
 
     // Changed to take &Position to avoid moving the value
+    /// Close every open position in a given mint at market.
+    ///
+    /// Used by the FOMO copier when the trader it follows sells (and exposed for
+    /// manual closes). Skips positions already in `Closing` so a pending sell is
+    /// never sent twice, and returns how many positions were closed.
+    pub async fn close_positions_by_token(
+        &self,
+        token_address: &str,
+        reason: PositionStatus,
+    ) -> Result<usize> {
+        let matching: Vec<Position> = {
+            let positions = self.positions.read().await;
+            positions
+                .values()
+                .filter(|p| p.token_address == token_address && p.status == PositionStatus::Active)
+                .cloned()
+                .collect()
+        };
+
+        if matching.is_empty() {
+            debug!(
+                "close_positions_by_token: no open position for {}",
+                token_address
+            );
+            return Ok(0);
+        }
+
+        let mut closed = 0usize;
+        for position in matching {
+            match self.execute_exit(&position, reason.clone()).await {
+                Ok(_) => closed += 1,
+                Err(e) => error!(
+                    "Failed to close position {} ({}) at market: {:?}",
+                    position.token_symbol, position.id, e
+                ),
+            }
+        }
+        Ok(closed)
+    }
+
     /// Kill-switch path: market-sell every open position right now.
     ///
     /// Unlike the scheduled exits this ignores SL/TP state and ignores price

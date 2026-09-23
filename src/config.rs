@@ -47,6 +47,47 @@ pub struct Config {
     /// When the kill switch fires, also market-sell every open position.
     pub emergency_flatten_positions: bool,
 
+    // =========================================================================
+    // FOMO leaderboard copy-trading
+    // =========================================================================
+    /// `official` | `fomoapi` | `custom`.
+    pub fomo_provider: String,
+    /// Base URL override (needed for `custom`, optional otherwise).
+    pub fomo_api_base: Option<String>,
+    /// Bearer token: a fomoapi.io key, an official JWT, or a custom-endpoint key.
+    pub fomo_api_key: Option<String>,
+    /// Explicit bearer token, wins over `fomo_api_key` (official JWT).
+    pub fomo_auth_token: Option<String>,
+    /// `Cookie` header, e.g. `__cf_bm=...` for the official endpoint.
+    pub fomo_cf_cookie: Option<String>,
+    /// Leaderboard window: `24h` | `7d` | `30d` | `all`.
+    pub fomo_window: String,
+    /// Pin the clan instead of discovering the top one.
+    pub fomo_clan_id: Option<String>,
+    /// Pin the trader (handle) instead of clan -> top member discovery.
+    pub fomo_trader_handle: Option<String>,
+    pub fomo_trader_id: Option<String>,
+    /// Path template for clan members; `{clan_id}` and `{window}` are substituted.
+    pub fomo_clan_members_path: String,
+    /// How often to re-run clan/member discovery (default: daily).
+    pub fomo_refresh_secs: u64,
+    /// How often to poll the copied trader's swaps.
+    pub fomo_poll_secs: u64,
+    /// Fixed copy size in SOL (`FOMO_SIZE_MODE=fixed`).
+    pub fomo_copy_size_sol: f64,
+    /// `fixed` | `proportional`.
+    pub fomo_size_mode: String,
+    /// Fraction of the copied trade's notional used when `proportional`.
+    pub fomo_copy_ratio: f64,
+    /// Close our position when the copied trader sells the same mint.
+    pub fomo_mirror_sells: bool,
+    /// Ignore copied swaps smaller than this (USD).
+    pub fomo_min_swap_usd: f64,
+    /// Maximum concurrent copied positions.
+    pub fomo_max_positions: u32,
+    /// Network ids treated as Solana.
+    pub fomo_solana_network_ids: Vec<String>,
+
     // Copy Trade Configuration
     pub treasury_wallet: Option<String>,
     pub copy_trade_fee_percent: f64,
@@ -154,6 +195,42 @@ impl Config {
             emergency_flatten_positions: env::var("EMERGENCY_FLATTEN_POSITIONS")
                 .map(|v| v.to_lowercase() == "true")
                 .unwrap_or(false),
+
+            // FOMO leaderboard copy-trading
+            fomo_provider: env::var("FOMO_PROVIDER")
+                .unwrap_or_else(|_| "official".to_string()),
+            fomo_api_base: env::var("FOMO_API_BASE").ok(),
+            fomo_api_key: env::var("FOMO_API_KEY").ok(),
+            fomo_auth_token: env::var("FOMO_AUTH_TOKEN").ok(),
+            fomo_cf_cookie: env::var("FOMO_CF_COOKIE").ok(),
+            fomo_window: env::var("FOMO_WINDOW").unwrap_or_else(|_| "24h".to_string()),
+            fomo_clan_id: env::var("FOMO_CLAN_ID").ok(),
+            fomo_trader_handle: env::var("FOMO_TRADER_HANDLE").ok(),
+            fomo_trader_id: env::var("FOMO_TRADER_ID").ok(),
+            fomo_clan_members_path: env::var("FOMO_CLAN_MEMBERS_PATH")
+                .unwrap_or_else(|_| "/v2/clans/{clan_id}/members".to_string()),
+            fomo_refresh_secs: env::var("FOMO_REFRESH_SECS")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(86_400),
+            fomo_poll_secs: env::var("FOMO_POLL_SECS")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(60),
+            fomo_copy_size_sol: env::var("FOMO_COPY_SIZE_SOL")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(0.05),
+            fomo_size_mode: env::var("FOMO_SIZE_MODE").unwrap_or_else(|_| "fixed".to_string()),
+            fomo_copy_ratio: env::var("FOMO_COPY_RATIO")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(0.02),
+            fomo_mirror_sells: env::var("FOMO_MIRROR_SELLS")
+                .map(|v| v.to_lowercase() != "false")
+                .unwrap_or(true),
+            fomo_min_swap_usd: env::var("FOMO_MIN_SWAP_USD")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(25.0),
+            fomo_max_positions: env::var("FOMO_MAX_POSITIONS")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(5),
+            fomo_solana_network_ids: env::var("FOMO_SOLANA_NETWORK_IDS")
+                .unwrap_or_else(|_| "1399811149,101,solana".to_string())
+                .split(',')
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty())
+                .collect(),
 
             // Copy Trade Configuration
             treasury_wallet: env::var("TREASURY_WALLET").ok(),

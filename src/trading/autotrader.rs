@@ -22,6 +22,7 @@ use crate::config::Config;
 use crate::trading::position::PositionManager;
 use crate::trading::risk::{RiskAnalysis, RiskAnalyzer};
 use crate::trading::risk_guard::{HaltKind, RiskGuard};
+use crate::trading::fomo_copy::FomoCopyEngine;
 use crate::trading::strategy::Strategy;
 use crate::trading::simulation::SimulationManager;
 use crate::trading::pumpfun::{PumpfunToken, BondingCurveState};
@@ -312,7 +313,7 @@ async fn should_execute_buy_task(
 }
 
 /// Executes the buy swap via Jupiter, confirms the transaction, and creates a position entry.
-async fn execute_buy_task(
+pub(crate) async fn execute_buy_task(
     token: &TokenMetadata,
     strategy: &Strategy,
     position_manager: &PositionManager, // Pass Arc<PositionManager>
@@ -475,6 +476,9 @@ pub struct AutoTrader {
 
     // Telegram sniper signal receiver (for TelegramCall strategy)
     tg_signal_rx: Arc<Mutex<Option<mpsc::Receiver<CallSignal>>>>,
+
+    // FOMO leaderboard copy-trading (for FomoCopy strategy)
+    fomo_engine: Arc<Mutex<Option<Arc<FomoCopyEngine>>>>,
 }
 
 impl AutoTrader {
@@ -592,6 +596,8 @@ impl AutoTrader {
             scanner: Arc::new(Mutex::new(None)), // Scanner initialized in start() when needed
             // Telegram sniper signal receiver — injected later by main.rs
             tg_signal_rx: Arc::new(Mutex::new(None)),
+            // FOMO copy engine — started on demand when that strategy is active
+            fomo_engine: Arc::new(Mutex::new(None)),
         };
         
         // Initialize by loading strategies - use await directly since we're in an async function
@@ -714,6 +720,7 @@ impl AutoTrader {
             "finalstretch" | "final_stretch" | "bonding" => StrategyType::FinalStretch,
             "migrated" | "graduated" => StrategyType::Migrated,
             "telegramcall" | "telegram_call" | "telegram" => StrategyType::TelegramCall,
+            "fomocopy" | "fomo_copy" | "fomo" | "copytrade" => StrategyType::FomoCopy,
             _ => StrategyType::FinalStretch,
         }
     }
@@ -923,6 +930,13 @@ impl AutoTrader {
             }
         } else if self.config.dry_run_mode {
             info!("📡 [DRY RUN] Strategy is {:?} - skipping Pump.fun WebSocket, using Moralis scanner", current_strategy);
+        }
+
+        // FOMO leaderboard copy: start the discovery + mirror loops.
+        if current_strategy == crate::trading::strategy::StrategyType::FomoCopy {
+            if let Err(e) = self.start_fomo_copy().await {
+                warn!("Failed to start FOMO copy engine: {:?}", e);
+            }
         }
 
         // Set running flag to true
@@ -1380,6 +1394,130 @@ impl AutoTrader {
         Ok(())
     }
 
+    // --- FOMO leaderboard copy-trading -------------------------------------
+
+    /// Build (once) and start the FOMO copy engine for the FomoCopy strategy.
+    pub async fn start_fomo_copy(&self) -> Result<()> {
+        let existing = self.fomo_engine.lock().await.clone();
+        if let Some(engine) = existing {
+            if engine.is_running().await {
+                debug!("FOMO copy engine already running");
+                return Ok(());
+            }
+        }
+
+        let engine = self.build_fomo_engine().await?;
+        engine.load_state().await?;
+
+        // Resolve the target immediately so the dashboard shows who we copy
+        // without waiting for the first poll interval.
+        if let Err(e) = engine.refresh_target().await {
+            warn!("FOMO copy: initial discovery failed ({:?}) — will retry in the loop", e);
+        }
+
+        let node = Arc::new(engine);
+        {
+            let mut slot = self.fomo_engine.lock().await;
+            *slot = Some(node.clone());
+        }
+        tokio::spawn(node.clone().run());
+        Ok(())
+    }
+
+    /// The strategy whose rules copied positions should inherit.
+    async fn active_fomo_strategy(&self) -> Strategy {
+        let strategies = self.strategies.read().await;
+        strategies
+            .values()
+            .find(|s| s.enabled && s.strategy_type == crate::trading::strategy::StrategyType::FomoCopy)
+            .cloned()
+            .unwrap_or_else(|| Strategy::fomo_copy("FOMO Leaderboard Copy"))
+    }
+
+    async fn build_fomo_engine(&self) -> Result<Arc<FomoCopyEngine>> {
+        let client = Arc::new(crate::api::fomo::FomoClient::new(
+            crate::api::fomo::FomoClientConfig::from_config(&self.config),
+        ));
+        let strategy = self.active_fomo_strategy().await;
+
+        let engine = FomoCopyEngine::new(
+            self.config.clone(),
+            client,
+            self.position_manager.clone(),
+            self.jupiter_client.clone(),
+            self.wallet_manager.clone(),
+            self.risk_guard.clone(),
+            self.simulation_manager.clone(),
+            strategy,
+        );
+
+        // Manual pins from the environment override discovery.
+        if self.config.fomo_clan_id.is_some()
+            || self.config.fomo_trader_handle.is_some()
+            || self.config.fomo_trader_id.is_some()
+        {
+            engine
+                .set_pins(
+                    self.config.fomo_clan_id.clone(),
+                    self.config
+                        .fomo_trader_handle
+                        .clone()
+                        .or_else(|| self.config.fomo_trader_id.clone()),
+                )
+                .await?;
+        }
+
+        Ok(Arc::new(engine))
+    }
+
+    /// Handle to the running engine, if any (used by the API handlers).
+    pub async fn fomo_engine(&self) -> Option<Arc<FomoCopyEngine>> {
+        self.fomo_engine.lock().await.clone()
+    }
+
+    /// Force a rediscovery of the top clan / top member (POST /api/fomo/refresh).
+    pub async fn fomo_refresh(&self) -> Result<()> {
+        if let Some(engine) = self.fomo_engine().await {
+            return engine.refresh_target().await;
+        }
+
+        // Nothing running yet: build one so the operator can inspect/force a
+        // target even before the strategy is switched on.
+        let engine = self.build_fomo_engine().await?;
+        engine.load_state().await?;
+        engine.refresh_target().await?;
+        {
+            let mut slot = self.fomo_engine.lock().await;
+            *slot = Some(engine);
+        }
+        Ok(())
+    }
+
+    /// Pin (or clear) which clan/trader to copy, overriding discovery.
+    pub async fn fomo_set_pins(
+        &self,
+        clan_id: Option<String>,
+        trader: Option<String>,
+    ) -> Result<()> {
+        if let Some(engine) = self.fomo_engine().await {
+            engine.set_pins(clan_id, trader).await?;
+            if let Err(e) = engine.refresh_target().await {
+                warn!("FOMO copy: rediscovery after pinning failed: {:?}", e);
+            }
+            return Ok(());
+        }
+
+        let engine = self.build_fomo_engine().await?;
+        engine.load_state().await?;
+        engine.set_pins(clan_id, trader).await?;
+        if let Err(e) = engine.refresh_target().await {
+            warn!("FOMO copy: rediscovery after pinning failed: {:?}", e);
+        }
+        let mut slot = self.fomo_engine.lock().await;
+        *slot = Some(engine);
+        Ok(())
+    }
+
     /// Operator kill switch: block every new entry immediately, then (optionally)
     /// liquidate open positions and stop the trading loops.
     ///
@@ -1428,6 +1566,11 @@ impl AutoTrader {
             handle.await.context("Failed to wait for AutoTrader task to finish")?;
         }
         drop(task_handle_guard);
+
+        // Stop the FOMO copy engine if it was running
+        if let Some(engine) = self.fomo_engine.lock().await.clone() {
+            engine.stop().await;
+        }
 
         // Stop position manager monitoring
         self.position_manager.stop_monitoring().await?;

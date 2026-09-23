@@ -1267,6 +1267,7 @@ pub async fn set_active_strategy_type(
         "finalstretch" | "final_stretch" | "bonding" => StrategyType::FinalStretch,
         "migrated" | "graduated" => StrategyType::Migrated,
         "telegramcall" | "telegram_call" | "telegram" => StrategyType::TelegramCall,
+        "fomocopy" | "fomo_copy" | "fomo" | "copytrade" => StrategyType::FomoCopy,
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -1483,6 +1484,185 @@ pub async fn emergency_stop(
                     error:
                         "Kill switch engaged, but the AutoTrader did not stop cleanly. Entries are still blocked."
                             .to_string(),
+                    details: Some(e.to_string()),
+                }),
+            ))
+        }
+    }
+}
+
+// ============================================================================
+// FOMO Leaderboard Copy-Trading
+// ============================================================================
+
+/// Who the bot is copying right now: top clan, top member, and the counters.
+pub async fn get_fomo_status(
+    State(state): State<AppState>,
+) -> Result<Json<FomoStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let auto_trader = state.auto_trader.lock().await;
+    let engine = auto_trader.fomo_engine().await;
+    let running = match &engine {
+        Some(engine) => engine.is_running().await,
+        None => false,
+    };
+
+    // No engine yet (strategy never started): report configuration alone so the
+    // dashboard can explain what is missing instead of 404ing.
+    let stats = match engine {
+        Some(engine) => engine.stats().await,
+        None => crate::trading::fomo_copy::FomoStats {
+            provider: crate::api::fomo::FomoProvider::parse(&state.config.fomo_provider)
+                .as_str()
+                .to_string(),
+            base_url: state
+                .config
+                .fomo_api_base
+                .clone()
+                .unwrap_or_else(|| {
+                    crate::api::fomo::FomoProvider::parse(&state.config.fomo_provider)
+                        .default_base_url()
+                        .to_string()
+                }),
+            enabled: false,
+            mode: if state.config.demo_mode {
+                "demo".to_string()
+            } else if state.config.dry_run_mode {
+                "dry_run".to_string()
+            } else {
+                "live".to_string()
+            },
+            window: state.config.fomo_window.clone(),
+            target_clan: None,
+            target_trader: None,
+            last_discovery: None,
+            last_poll: None,
+            mirrored: 0,
+            skipped: 0,
+            failed: 0,
+            last_error: None,
+            recent: Vec::new(),
+        },
+    };
+    drop(auto_trader);
+
+    Ok(Json(FomoStatusResponse {
+        provider: stats.provider,
+        base_url: stats.base_url,
+        enabled: stats.enabled,
+        mode: stats.mode,
+        window: stats.window,
+        running,
+        target: FomoTargetResponse {
+            clan_id: stats.target_clan.as_ref().map(|c| c.id.clone()),
+            clan_name: stats.target_clan.as_ref().map(|c| c.name.clone()),
+            clan_pnl_usd: stats.target_clan.as_ref().map(|c| c.pnl_usd),
+            clan_member_count: stats.target_clan.as_ref().and_then(|c| c.member_count),
+            trader_user_id: stats.target_trader.as_ref().map(|t| t.user_id.clone()),
+            trader_handle: stats.target_trader.as_ref().map(|t| t.handle.clone()),
+            trader_display_name: stats.target_trader.as_ref().map(|t| t.display_name.clone()),
+            trader_pnl_usd: stats.target_trader.as_ref().map(|t| t.pnl_usd),
+            trader_verified: stats.target_trader.as_ref().map(|t| t.verified),
+        },
+        last_discovery: stats.last_discovery,
+        last_poll: stats.last_poll,
+        mirrored: stats.mirrored,
+        skipped: stats.skipped,
+        failed: stats.failed,
+        last_error: stats.last_error,
+        recent: stats
+            .recent
+            .into_iter()
+            .map(|entry| FomoDecisionResponse {
+                at: entry.at,
+                action: entry.action,
+                token_address: entry.token_address,
+                token_symbol: entry.token_symbol,
+                detail: entry.detail,
+            })
+            .collect(),
+        limits: FomoLimitsResponse {
+            copy_size_sol: state.config.fomo_copy_size_sol,
+            size_mode: state.config.fomo_size_mode.clone(),
+            copy_ratio: state.config.fomo_copy_ratio,
+            min_swap_usd: state.config.fomo_min_swap_usd,
+            max_positions: state.config.fomo_max_positions,
+            mirror_sells: state.config.fomo_mirror_sells,
+            refresh_secs: state.config.fomo_refresh_secs,
+            poll_secs: state.config.fomo_poll_secs,
+        },
+    }))
+}
+
+/// Re-run discovery now instead of waiting for the daily refresh.
+pub async fn refresh_fomo_target(
+    State(state): State<AppState>,
+) -> Result<Json<FomoActionResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let auto_trader = state.auto_trader.lock().await;
+    let result = auto_trader.fomo_refresh().await;
+    drop(auto_trader);
+
+    match result {
+        Ok(_) => {
+            info!("FOMO copy target refreshed via API");
+            Ok(Json(FomoActionResponse {
+                success: true,
+                message: "FOMO copy target refreshed".to_string(),
+            }))
+        }
+        Err(e) => {
+            error!("FOMO copy refresh failed: {:?}", e);
+            Err((
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    error: "Could not refresh the FOMO copy target".to_string(),
+                    details: Some(e.to_string()),
+                }),
+            ))
+        }
+    }
+}
+
+/// Pin which clan/trader to copy (empty strings clear the pin).
+pub async fn set_fomo_target(
+    State(state): State<AppState>,
+    Json(request): Json<FomoTargetRequest>,
+) -> Result<Json<FomoActionResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let clan_id = request
+        .clan_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let trader = request
+        .trader
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let auto_trader = state.auto_trader.lock().await;
+    let result = auto_trader
+        .fomo_set_pins(clan_id.clone(), trader.clone())
+        .await;
+    drop(auto_trader);
+
+    match result {
+        Ok(_) => {
+            info!(
+                "FOMO copy target pinned via API (clan={:?}, trader={:?})",
+                clan_id, trader
+            );
+            Ok(Json(FomoActionResponse {
+                success: true,
+                message: match (&clan_id, &trader) {
+                    (Some(clan), _) => format!("Copying clan {clan}"),
+                    (None, Some(trader)) => format!("Copying trader @{trader}"),
+                    (None, None) => "FOMO copy pins cleared — back to automatic discovery".to_string(),
+                },
+            }))
+        }
+        Err(e) => {
+            error!("FOMO copy pinning failed: {:?}", e);
+            Err((
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    error: "Could not apply the FOMO copy target".to_string(),
                     details: Some(e.to_string()),
                 }),
             ))

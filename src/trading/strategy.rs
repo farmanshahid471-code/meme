@@ -22,6 +22,10 @@ pub enum StrategyType {
     /// "Gamboled"/"Gamboling" messages containing a pump.fun mint, dumps
     /// 90% after a short hold.
     TelegramCall,
+    /// Copies the top trader of the top clan on fomo.family's leaderboard.
+    /// Discovery runs daily (`FOMO_REFRESH_SECS`); swaps are polled and
+    /// mirrored (see `trading::fomo_copy`).
+    FomoCopy,
 }
 
 impl StrategyType {
@@ -31,6 +35,7 @@ impl StrategyType {
             StrategyType::FinalStretch => "Final Stretch",
             StrategyType::Migrated => "Migrated",
             StrategyType::TelegramCall => "Telegram Call",
+            StrategyType::FomoCopy => "FOMO Leaderboard Copy",
         }
     }
 
@@ -40,6 +45,7 @@ impl StrategyType {
             StrategyType::FinalStretch => "Tokens on bonding curve with proven traction (20-80% progress)",
             StrategyType::Migrated => "Tokens graduated to PumpSwap/Raydium with established liquidity",
             StrategyType::TelegramCall => "Snipes tokens called out by a monitored Telegram channel",
+            StrategyType::FomoCopy => "Copies the top member of the top clan on fomo.family",
         }
     }
 }
@@ -262,6 +268,49 @@ impl Strategy {
         }
     }
 
+    /// Create a FOMO leaderboard-copy strategy with recommended defaults.
+    /// Sizing itself lives in Config (`FOMO_*`), so this mostly carries the
+    /// risk envelope the copied positions inherit.
+    pub fn fomo_copy(name: &str) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4().to_string(),
+            name: name.to_string(),
+            enabled: true,
+            strategy_type: StrategyType::FomoCopy,
+            max_concurrent_positions: 5,
+            max_position_size_sol: 0.05,   // mirrors FOMO_COPY_SIZE_SOL default
+            total_budget_sol: 0.5,
+            // Copied trades are followed, not bag-held: exits are loose because
+            // the signal to leave is the copied trader selling.
+            stop_loss_percent: Some(30),
+            take_profit_percent: Some(100),
+            trailing_stop_percent: Some(20),
+            max_hold_time_minutes: 720,    // 12 hours
+            // No discovery filters apply — the leaderboard is the filter.
+            min_liquidity_sol: 0,
+            max_risk_level: 100,
+            min_holders: 0,
+            max_token_age_minutes: 1440,
+            require_lp_burned: false,
+            reject_if_mint_authority: false,
+            reject_if_freeze_authority: false,
+            require_can_sell: false,
+            max_transfer_tax_percent: None,
+            max_concentration_percent: None,
+            min_volume_usd: None,
+            min_market_cap_usd: None,
+            min_bonding_progress: None,
+            require_migrated: None,
+            min_buy_ratio_percent: 0.0,
+            min_unique_wallets_24h: None,
+            slippage_bps: Some(1000),
+            priority_fee_micro_lamports: Some(500_000),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     // Call this when updating strategy parameters
     pub fn touch(&mut self) {
         self.updated_at = Utc::now();
@@ -351,6 +400,7 @@ pub fn ensure_enabled_strategy(
         StrategyType::FinalStretch => Strategy::final_stretch("Final Stretch Scout"),
         StrategyType::Migrated => Strategy::migrated("Migrated Scout"),
         StrategyType::TelegramCall => Strategy::telegram_call("Telegram Call Sniper"),
+        StrategyType::FomoCopy => Strategy::fomo_copy("FOMO Leaderboard Copy"),
     };
     strategies.insert(strategy.id.clone(), strategy);
     true

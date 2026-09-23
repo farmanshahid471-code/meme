@@ -54,6 +54,11 @@ pub fn create_routes(state: AppState) -> Router {
         .route("/api/risk/reset", post(handlers::reset_risk_guard))
         .route("/api/emergency/stop", post(handlers::emergency_stop))
 
+        // FOMO leaderboard copy-trading
+        .route("/api/fomo/status", get(handlers::get_fomo_status))
+        .route("/api/fomo/refresh", post(handlers::refresh_fomo_target))
+        .route("/api/fomo/target", post(handlers::set_fomo_target))
+
         // Token analysis
         .route("/api/analyze", post(handlers::analyze_token))
 
