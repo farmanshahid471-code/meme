@@ -48,13 +48,25 @@ payloads.
 
 | `FOMO_PROVIDER` | Base URL | Auth | Clan board | Notes |
 |---|---|---|---|---|
-| `official` | `https://prod-api.fomo.family` | `FOMO_AUTH_TOKEN` (JWT) + optional `FOMO_CF_COOKIE` | ✅ native | Highest fidelity. Often 430 from datacentres; works from some residential/VPS IPs. Token expires hourly. |
+| `official` | `https://prod-api.fomo.family` | `FOMO_AUTH_TOKEN` (JWT) + optional `FOMO_CF_COOKIE` | ✅ native | Highest fidelity. Often 430 from datacentres; works from some residential/VPS IPs. **The JWT lives ~1 h** — use `FOMO_AUTH_TOKEN_FILE` so a helper script can rewrite it without restarting the bot. |
 | `fomoapi` | `https://api.fomoapi.io` | `FOMO_API_KEY` (free key) | ⚠️ derived | Documented third-party mirror; server-friendly. No clan board, so the bot **derives** clans by summing the traders' `clan` field. |
 | `custom` | `FOMO_API_BASE` | `FOMO_API_KEY` | as served | Anything that speaks the same JSON: your own proxy, an extension bridge, a cache you refresh from the browser console. |
 
 `FOMO_CLAN_MEMBERS_PATH` defaults to `/v2/clans/{clan_id}/members`; `{clan_id}`
 and `{window}` are substituted, so a different provider path only needs a config
 change.
+
+**Keeping the official session alive.** The JWT expires after about an hour, so a
+24/7 bot should not read it once at boot. Point `FOMO_AUTH_TOKEN_FILE` at a file
+and refresh it from wherever you can get a fresh token (a browser helper, a
+cron job, a proxy). The bot re-reads the file on **every request** and accepts
+either a bare token or a `Bearer <token>` line:
+
+```bash
+FOMO_AUTH_TOKEN_FILE=/app/data/fomo_token.txt
+# refresh helper (runs hourly):
+#   echo "$NEW_JWT" > /app/data/fomo_token.txt
+```
 
 **If nothing works from your host**, pin the target instead — the bot then needs
 only the trader's swaps:

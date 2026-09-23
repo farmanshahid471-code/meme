@@ -170,6 +170,10 @@ pub struct FomoClientConfig {
     pub base_url: String,
     /// Bearer token: a `fomoapi.io` key, an official JWT, or a custom-endpoint key.
     pub api_key: Option<String>,
+    /// File to read the bearer token from on every request (wins over `api_key`
+    /// when present and readable). The official JWT lives ~1 hour, so a 24/7 bot
+    /// needs an external helper to refresh this file.
+    pub api_key_file: Option<String>,
     /// `Cookie` header, e.g. `__cf_bm=…` for the official endpoint.
     pub cookie: Option<String>,
     /// Leaderboard window: `24h`, `7d`, `30d`, `all`.
@@ -201,6 +205,10 @@ impl FomoClientConfig {
             provider,
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
+            api_key_file: config
+                .fomo_auth_token_file
+                .clone()
+                .filter(|path| !path.trim().is_empty()),
             cookie: config.fomo_cf_cookie.clone().filter(|c| !c.trim().is_empty()),
             window: config.fomo_window.clone(),
             clan_members_path: config.fomo_clan_members_path.clone(),
@@ -274,7 +282,7 @@ impl FomoClient {
         };
 
         let mut request = self.http.get(&url);
-        if let Some(key) = &self.config.api_key {
+        if let Some(key) = self.current_token() {
             request = request.header("authorization", format!("Bearer {key}"));
         }
         if let Some(cookie) = &self.config.cookie {
@@ -479,6 +487,35 @@ impl FomoClient {
         Err(last_error.unwrap_or_else(|| {
             FomoError::NotFound(format!("no swaps available for user {user_id}"))
         }))
+    }
+
+    /// Resolve the bearer token for this request.
+    ///
+    /// A token *file* takes precedence when it exists and is non-empty: the
+    /// official provider's JWT lasts about an hour, so the operator (or a helper
+    /// script) rewrites it and the long-running bot picks the new value up on
+    /// the next call without a restart.
+    fn current_token(&self) -> Option<String> {
+        if let Some(path) = &self.config.api_key_file {
+            match std::fs::read_to_string(path) {
+                Ok(raw) => {
+                    let trimmed = raw.trim();
+                    if !trimmed.is_empty() {
+                        // Tolerate both a bare token and a "Bearer <token>" line.
+                        return Some(
+                            trimmed
+                                .strip_prefix("Bearer ")
+                                .or_else(|| trimmed.strip_prefix("bearer "))
+                                .unwrap_or(trimmed)
+                                .trim()
+                                .to_string(),
+                        );
+                    }
+                }
+                Err(e) => debug!("FOMO token file {path} unreadable: {e}"),
+            }
+        }
+        self.config.api_key.clone()
     }
 
     fn fomo_pnl_keys(&self) -> Vec<String> {
@@ -928,6 +965,7 @@ mod tests {
             provider,
             base_url: "http://localhost".to_string(),
             api_key: Some("test".to_string()),
+            api_key_file: None,
             cookie: None,
             window: "24h".to_string(),
             clan_members_path: "/v2/clans/{clan_id}/members".to_string(),
@@ -1198,6 +1236,37 @@ mod tests {
         assert!(!looks_like_solana_mint("0x8226dda5f73619dedc671e09be738fa308da1944"));
         assert!(!looks_like_solana_mint("So1111"));
         assert!(!looks_like_solana_mint("has0OIl-invalid-base58-address-here-1234567890"));
+    }
+
+    #[test]
+    fn token_file_is_read_per_request_and_strips_bearer_prefix() {
+        let path = std::env::temp_dir().join(format!("fomo-token-{}.txt", std::process::id()));
+        std::fs::write(&path, "Bearer fresh-jwt-123\n").unwrap();
+
+        let mut config = FomoClientConfig {
+            provider: FomoProvider::Official,
+            base_url: "http://localhost".to_string(),
+            api_key: Some("stale-env-token".to_string()),
+            api_key_file: Some(path.to_string_lossy().to_string()),
+            cookie: None,
+            window: "24h".to_string(),
+            clan_members_path: "/v2/clans/{clan_id}/members".to_string(),
+            solana_network_ids: vec!["1399811149".into()],
+            timeout_secs: 5,
+        };
+        let client = FomoClient::new(config.clone());
+        assert_eq!(client.current_token().as_deref(), Some("fresh-jwt-123"));
+
+        // Rewriting the file (as a refresh helper would) is picked up next call.
+        std::fs::write(&path, "another-token").unwrap();
+        assert_eq!(client.current_token().as_deref(), Some("another-token"));
+
+        // Fall back to the configured key when the file is gone.
+        config.api_key_file = Some("/nonexistent/fomo-token".to_string());
+        let fallback = FomoClient::new(config);
+        assert_eq!(fallback.current_token().as_deref(), Some("stale-env-token"));
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -58,6 +58,10 @@ pub struct Config {
     pub fomo_api_key: Option<String>,
     /// Explicit bearer token, wins over `fomo_api_key` (official JWT).
     pub fomo_auth_token: Option<String>,
+    /// Path to a file holding the bearer token. Re-read on every request, so a
+    /// short-lived (1h) official JWT can be refreshed by an external helper
+    /// without restarting the bot.
+    pub fomo_auth_token_file: Option<String>,
     /// `Cookie` header, e.g. `__cf_bm=...` for the official endpoint.
     pub fomo_cf_cookie: Option<String>,
     /// Leaderboard window: `24h` | `7d` | `30d` | `all`.
@@ -202,6 +206,7 @@ impl Config {
             fomo_api_base: env::var("FOMO_API_BASE").ok(),
             fomo_api_key: env::var("FOMO_API_KEY").ok(),
             fomo_auth_token: env::var("FOMO_AUTH_TOKEN").ok(),
+            fomo_auth_token_file: env::var("FOMO_AUTH_TOKEN_FILE").ok(),
             fomo_cf_cookie: env::var("FOMO_CF_COOKIE").ok(),
             fomo_window: env::var("FOMO_WINDOW").unwrap_or_else(|_| "24h".to_string()),
             fomo_clan_id: env::var("FOMO_CLAN_ID").ok(),
