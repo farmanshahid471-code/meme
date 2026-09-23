@@ -63,3 +63,63 @@ To pull future upstream changes: `git remote add upstream https://github.com/ton
 - Live/paper validation (dry run, demo mode) has to happen on your machine or VPS:
   `cp .env.example .env && DEMO_MODE=true DRY_RUN_MODE=true cargo run --release`.
 - Node.js and Python *are* available here, so a mock backend + live-previewable dashboard harness can be built if we want to iterate on the UI/analytics without running the Rust bot.
+
+---
+
+## 5. Status
+
+| Track | State | Notes |
+|-------|-------|-------|
+| **A — Safety & risk controls** | ✅ implemented (`arena/01a0d052-meme`) | see §6 for the API; verified by CI (`cargo check --all-targets` + `cargo test`, 61 tests) |
+| B — Smarter exits | ⬜ next | laddered TP, breakeven stop, trailing activation threshold, momentum/time exits |
+| C — Alerts & analytics | ⬜ planned | Discord/Telegram/webhook alerts, trade journal + CSV export, richer stats |
+| D — Entry & discovery | ⬜ planned | dev-wallet/bundle detection, dynamic priority fees, Jito tips, copy-trade fan-out |
+
+## 6. Track A — how to use it
+
+### Configure
+
+```bash
+API_KEY=$(openssl rand -hex 32)      # required on every call except /api/health
+CORS_ORIGINS=https://your-dashboard.example.com
+DAILY_LOSS_LIMIT_SOL=0.10            # stop for the day at -0.10 SOL realised
+MAX_DRAWDOWN_PERCENT=25              # stop when equity is 25% below its peak
+MAX_TRADES_PER_DAY=10                # entry cap per UTC day
+MAX_CONSECUTIVE_LOSSES=3             # pause after 3 losers in a row
+TOKEN_COOLDOWN_MINUTES=30            # no re-entry into a mint for 30 min after exit
+EMERGENCY_FLATTEN_POSITIONS=false    # kill switch: sell everything, or just stop?
+```
+
+Leaving a rail empty disables it. With `API_KEY` unset the API stays open (as
+before) but the bot logs a loud warning at boot.
+
+### Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/risk/status` | rails, today's PnL, entry counts, losing streak, equity vs peak, refused entries, mints in cooldown |
+| `POST /api/risk/reset[?clear_counters=true]` | clear a halt (kill switch, daily-loss pause, drawdown breaker) |
+| `POST /api/emergency/stop[?flatten=true&reason=...]` | kill switch: block entries immediately, optionally market-sell everything, stop the loops |
+
+Authentication: `X-API-Key: <key>`, `Authorization: Bearer <key>`, or `?api_key=<key>`
+for the WebSocket. `/api/health` stays public for uptime probes.
+
+### Behaviour notes
+
+- The rails gate **entries only** — stop loss, take profit, trailing stop and the
+  kill switch keep working on open positions, and a halted bot still manages them.
+- Every automated entry is checked immediately before the swap (scan cycle,
+  Moralis/Final-Stretch scanner, manual dashboard buys, Telegram sniper), so a
+  refusal costs nothing but a log line.
+- Realised PnL from each closed position feeds the guard; the daily counters roll
+  over at UTC midnight, while a manual halt persists until `/api/risk/reset`.
+- The dashboard ships `webapp/js/risk.js`: a floating card with the live rail
+  state, the kill switch and an API-key field.
+
+### Previewing the UI without the bot
+
+```bash
+node tools/dev-harness/server.js     # http://localhost:8080 — mock backend + real dashboard
+```
+
+See `tools/dev-harness/README.md`.
