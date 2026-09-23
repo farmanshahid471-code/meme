@@ -498,23 +498,24 @@ impl FomoClient {
 
     /// Turn a raw swap into a mirror signal if it moved a Solana token.
     pub fn to_mirror_signal(&self, swap: &FomoSwap) -> Option<MirrorSignal> {
-        let spent_is_solana = swap
+        // The tradeable leg is the Solana leg that is NOT a quote asset. Both
+        // legs are usually on Solana (SOL -> memecoin), so the chain alone
+        // cannot tell us the direction.
+        let spent_token = swap
             .spent
             .as_ref()
-            .map(|leg| self.is_solana_leg(leg))
-            .unwrap_or(false);
-        let received_is_solana = swap
+            .filter(|leg| self.is_solana_leg(leg) && !is_quote_asset(leg));
+        let received_token = swap
             .received
             .as_ref()
-            .map(|leg| self.is_solana_leg(leg))
-            .unwrap_or(false);
+            .filter(|leg| self.is_solana_leg(leg) && !is_quote_asset(leg));
 
-        // A buy: paid with something, received a Solana token.
-        // A sell: spent a Solana token, received something else.
-        let (side, leg) = match (spent_is_solana, received_is_solana) {
-            (false, true) => (SwapSide::Buy, swap.received.as_ref()?),
-            (true, false) => (SwapSide::Sell, swap.spent.as_ref()?),
-            // Token-for-token or same-chain both sides: not a clean copy signal.
+        let (side, leg) = match (spent_token, received_token) {
+            // Paid with SOL/USDC, received a token: a buy.
+            (None, Some(leg)) => (SwapSide::Buy, leg),
+            // Sold a token for SOL/USDC: a sell.
+            (Some(leg), None) => (SwapSide::Sell, leg),
+            // Token-for-token, or no tradeable Solana leg at all.
             _ => return None,
         };
 
@@ -544,6 +545,32 @@ impl FomoClient {
             None => looks_like_solana_mint(&leg.address),
         }
     }
+}
+
+/// Quote assets we never treat as the copied token: the trader is not "long
+/// SOL" when they swap SOL for a memecoin.
+pub const QUOTE_MINTS: [&str; 3] = [
+    // wrapped SOL
+    "So11111111111111111111111111111111111111112",
+    // USDC
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    // USDT
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+];
+
+fn is_quote_asset(leg: &FomoTokenLeg) -> bool {
+    let address = leg.address.trim();
+    QUOTE_MINTS.iter().any(|mint| mint == &address)
+        || leg
+            .symbol
+            .as_deref()
+            .map(|symbol| {
+                matches!(
+                    symbol.trim().to_uppercase().as_str(),
+                    "SOL" | "WSOL" | "USDC" | "USDT"
+                )
+            })
+            .unwrap_or(false)
 }
 
 /// Cheap structural check used only when the payload omits a network id.
@@ -803,6 +830,25 @@ pub fn parse_swaps(value: &Value) -> Vec<FomoSwap> {
 /// Parse one swap leg. `prefix` is `"in"` (`inTokenAddress`, `inHumanAmount`…) or
 /// `"out"`, and the aggregated form uses `token`/`amount`.
 fn parse_leg(row: &Value, prefix: &str) -> Option<FomoTokenLeg> {
+    // Aggregated position shape: `{ token: { symbol, address, networkId }, amount }`.
+    if prefix == "token" {
+        if let Some(nested) = row.get("token").filter(|value| value.is_object()) {
+            if let Some(address) = string(nested, &["address", "tokenAddress", "mint", "token"])
+                .or_else(|| string(row, &["tokenAddress", "address"]))
+            {
+                return Some(FomoTokenLeg {
+                    address,
+                    symbol: string(nested, &["symbol", "name"]).or_else(|| string(row, &["symbol"])),
+                    human_amount: number(nested, &["amount", "humanAmount"])
+                        .or_else(|| number(row, &["amount", "humanAmount", "humanTokenAmount"]))
+                        .unwrap_or(0.0),
+                    network_id: string(nested, &["networkId", "network", "chain"])
+                        .or_else(|| string(row, &["networkId", "network", "chain"])),
+                });
+            }
+        }
+    }
+
     let (address_keys, symbol_keys): (Vec<String>, Vec<String>) = if prefix == "token" {
         (
             vec!["tokenAddress".into(), "address".into()],
