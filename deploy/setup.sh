@@ -18,7 +18,18 @@
 
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Works both as `sudo bash deploy/setup.sh` and as `curl … | sudo bash`
+# (in the piped case there is no script path, so fall back to the cwd).
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+  REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+else
+  REPO_DIR="$(pwd)"
+fi
+
+if [ ! -f "${REPO_DIR}/Cargo.toml" ] || [ ! -f "${REPO_DIR}/deploy/docker-compose.yml" ]; then
+  die "Run this from the repository root (or from deploy/): no Cargo.toml / deploy/docker-compose.yml under ${REPO_DIR}. Clone the repo first:
+    git clone -b arena/01a0d052-meme https://github.com/farmanshahid471-code/meme.git && cd meme"
+fi
 DATA_DIR="${REPO_DIR}/deploy/data"
 ENV_FILE="${REPO_DIR}/.env"
 KEEPALIVE_MIN_CPU="${KEEPALIVE_MIN_CPU:-6}"   # % CPU to keep Oracle from reclaiming
