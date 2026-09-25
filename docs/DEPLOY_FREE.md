@@ -274,9 +274,20 @@ npx vercel deploy --prod webapp
 
 Mixed content: Chrome and Firefox treat `http://localhost` as a *trustworthy*
 origin, so an HTTPS-hosted dashboard can still call `http://localhost:3030`
-through the tunnel below. If you want a real HTTPS API instead, use Cloudflare
-Tunnel (free) — `cloudflared tunnel --url http://localhost:3030` — and set
-`CORS_ORIGINS` to your dashboard's origin rather than `*`.
+through the tunnel below — as long as you are browsing from the machine that
+holds the tunnel.
+
+If you would rather have a real HTTPS API (so the dashboard works from any
+device), three options, all $0:
+
+| Option | URL | $ | Notes |
+|---|---|---|---|
+| `cloudflared tunnel --url http://localhost:3030` | random `*.trycloudflare.com` | 0 | No account needed. The URL **changes on every restart** and Cloudflare calls quick tunnels a debug aid — no uptime guarantee. |
+| **Tailscale Funnel** | stable `https://<machine>.<tailnet>.ts.net` | 0 | `tailscale funnel 3030`; Personal plan is free (6 users, unlimited devices) and Serve/Funnel are not metered. No domain needed. |
+| Named Cloudflare Tunnel | your own `api.example.com` | 0 for the tunnel | Needs a **domain** added to Cloudflare — the domain is the only cost here (~$8–12/year at Cloudflare Registrar's at-cost pricing). Best if you want Cloudflare Access in front of the API. |
+
+Whichever you pick, set `CORS_ORIGINS` to your dashboard's exact origin instead
+of `*`, and keep `API_KEY` set — a public HTTPS URL is still a public URL.
 
 > If you edit `webapp/js/config.js` you are also free to just open the dashboard
 > file locally (`python3 -m http.server` in `webapp/`), which keeps everything on
@@ -371,3 +382,32 @@ Before switching off `DEMO_MODE`:
 - [ ] Dashboard deployed with `webapp/js/config.js` pointing at your API, and the
       API key pasted once into its *Risk* card
 - [ ] An uptime monitor on `/api/health` (see §6) so a dead bot texts you
+
+---
+
+## 9. What this actually costs
+
+Everything in this guide is $0 **except** the last two rows — those are the price
+of trading at all, not of hosting.
+
+| Piece | Cost | Notes |
+|---|---|---|
+| Bot compute (Oracle Always Free ARM A1) | **$0** forever | 2 OCPU / 12 GB, 200 GB disk, 10 TB egress. Card needed at signup, nothing charged inside the limits. |
+| Bot compute (spare phone / laptop / Pi) | **$0** | You already own it; residential IP is a bonus. Electricity is the only "cost". |
+| Docker, Compose, systemd, this guide's scripts | **$0** | Open source. |
+| Static dashboard hosting | **$0** | **Cloudflare Pages** is the best free tier: unlimited bandwidth *and* unlimited requests, 500 builds/month, free SSL, free custom domain, no credit card. Netlify and Vercel free tiers cap at 100 GB/month; Vercel's Hobby plan also **forbids commercial use**, so prefer Cloudflare Pages for a trading dashboard. |
+| SSH tunnel (`ssh -L 3030:localhost:3030`) | **$0** | Just the SSH client you already have. Nothing is exposed to the internet. |
+| Cloudflare quick tunnel | **$0** | Random `*.trycloudflare.com` URL, no account. URL changes on restart; explicitly a debug aid, not production. |
+| Tailscale Funnel | **$0** | Stable `*.ts.net` HTTPS URL on the free Personal plan, no domain purchase. |
+| Named Cloudflare Tunnel | **$0** for the software | Needs a domain you own — see the next row. |
+| A domain name (optional) | ~**$8–12/year** | Only if you want `api.yourname.com` instead of a `*.ts.net` / `*.trycloudflare.com` URL. Cloudflare Registrar sells at cost; a `.xyz`/`.dev` is cheapest. **This is the only optional spend in the whole setup.** |
+| Uptime monitoring | **$0** | UptimeRobot / healthchecks.io free plans are plenty for one bot. |
+| RPC + data APIs (Helius, Birdeye, Moralis) | **$0** to start | All have free tiers (rate-limited). If you run many positions, a Helius paid plan (~$50/mo) removes the rate limits — optional. |
+| FOMO mirror key (`FOMO_PROVIDER=fomoapi`) | depends on the provider | Check the mirror's pricing; the `custom` provider costs whatever your proxy costs. |
+| **Solana network + priority fees, Jito tips** | **not free, not avoidable** | Every entry/exit costs ~0.000005 SOL base + priority fee (and a Jito tip if you enable it). Budget for it — this is why the risk guard's `DAILY_LOSS_LIMIT_SOL` matters. |
+| **The SOL you trade with** | **not free** | Obviously. Use a burner wallet funded with money you can afford to lose. |
+
+**Bottom line:** hosting a 24/7 bot with a live dashboard costs **$0/month**, and
+you can stay at $0 forever by skipping the domain and using `*.trycloudflare.com`
+or `*.ts.net`. The only money that leaves your wallet is what you choose to trade
+(plus per-transaction Solana fees).
