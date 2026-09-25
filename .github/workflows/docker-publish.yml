@@ -1,0 +1,72 @@
+# TraderTony V4 — container image publishing
+#
+# Builds the multi-arch image (amd64 + arm64) and pushes it to GitHub Container
+# Registry, so a free-tier ARM box (Oracle Ampere, Raspberry Pi, phone) can pull
+# a prebuilt image instead of compiling Solana's SDK on 1–2 cores for 20–40 min.
+#
+#   docker pull ghcr.io/<owner>/meme:latest
+#   # then in deploy/docker-compose.yml:  image: ghcr.io/<owner>/meme:latest
+#   #                                     (comment out the `build:` block)
+#
+# Runs on: pushes to main/master, version tags, and manual dispatch.
+name: Publish Docker image
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (for cross-building arm64 on amd64 runners)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push (linux/amd64, linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Rust builds are long; keep the cache warm between runs.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # arm64 emulation is slow — give the linker room.
+          provenance: false

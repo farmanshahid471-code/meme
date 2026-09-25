@@ -102,7 +102,20 @@ See `.env.example` for all options.
 
 ## Deployment
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for full Railway + Vercel deployment guide.
+**Free 24/7 hosting (no VPS needed):** see **[docs/DEPLOY_FREE.md](docs/DEPLOY_FREE.md)** —
+Oracle Cloud Always Free with Docker Compose, or a spare phone/laptop at home.
+One-shot setup:
+
+```bash
+git clone -b arena/01a0d052-meme https://github.com/<you>/meme.git && cd meme
+sudo bash deploy/setup.sh          # Docker + swap + .env + keepalive + compose up
+```
+
+The dashboard is a separate static site (`webapp/`) — host it free on
+Vercel/Netlify/Cloudflare Pages and set `window.API_BASE_URL` in
+`webapp/js/config.js` to your bot (docs/DEPLOY_FREE.md §6).
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the original Railway + Vercel guide.
 
 ## Security
 

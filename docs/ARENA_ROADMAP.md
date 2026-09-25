@@ -146,5 +146,34 @@ dry-run **and demo** mode; every copied entry passes the Track A risk guard.
 **Important constraint:** fomo.family has no public API and Cloudflare blocks most
 non-browser clients (HTTP 430) from datacentres, so the bot supports three data
 sources (`official`, `fomoapi` mirror, `custom` proxy) and lets you pin a clan or
-trader by hand. Run `node tools/fomo-probe.js` on the VPS to see what your host
-can reach.
+trader by hand. Run `node tools/fomo-probe.js` on the machine that will host the bot to see
+what it can reach.
+
+## 8. Track G — Free 24/7 hosting (no VPS)
+
+Full guide: **[DEPLOY_FREE.md](DEPLOY_FREE.md)**.
+
+The bot needs an always-on machine (a 15 s position-price poll, scanners, and
+in-memory position state), plus a disk that survives restarts for `data/`.
+Free options that actually qualify in 2026:
+
+| Option | Verdict |
+|---|---|
+| **Oracle Cloud Always Free** — ARM A1, 2 OCPU / 12 GB, 200 GB disk, 10 TB egress | ⭐ recommended; `deploy/setup.sh` provisions it end-to-end |
+| **Spare phone / laptop / Pi at home** | ⭐ best free option on a residential IP (fomo.family needs one) |
+| Northflank / Koyeb free tiers | work; small volumes, no real persistence guarantees |
+| GCP e2-micro | 1 GB egress/month — too chatty for this bot |
+| Render free | sleeps → rejected |
+| Railway / Fly.io | no permanent free compute |
+| GitHub Actions cron | 6 h job cap, unreliable schedules, no state — rejected |
+
+Shipped with this track:
+
+| Piece | Where |
+|---|---|
+| Docker Compose service (restart policy, healthcheck, volume, log rotation) | `deploy/docker-compose.yml` |
+| One-shot bootstrap (Docker, swap, `.env` + generated `API_KEY`, keepalive, compose up) | `deploy/setup.sh` |
+| Oracle idle-reclamation keepalive | `deploy/keepalive.sh` + `trader-keepalive.service` |
+| systemd unit for a non-Docker run | `deploy/systemd/trader-tony.service` |
+| FOMO bearer-token refresh/check helper | `deploy/refresh-fomo-token.sh` |
+| Multi-arch (amd64 + arm64) image → GHCR, so ARM boxes pull instead of building | `.github/workflows/docker-publish.yml` |

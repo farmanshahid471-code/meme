@@ -41,6 +41,7 @@ FROM debian:bookworm-slim AS runtime
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    curl \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -58,8 +59,10 @@ COPY --from=builder /app/target/release/trader-tony-v4 /app/trader-tony-v4
 # Expose the API port (Railway routes to this port)
 EXPOSE 3030
 
-# Note: Railway uses its own health check (healthcheckPath in railway.toml)
-# Docker HEALTHCHECK removed as it requires curl which isn't in slim image
+# Health probe: /api/health never requires the API key, so it is safe for
+# orchestrators (Docker, Fly.io, Northflank, Koyeb, Coolify...).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:3030/api/health || exit 1
 
 # Default environment variables
 ENV RUST_LOG=info

@@ -1,0 +1,58 @@
+# TraderTony V4 — systemd unit for a bare-metal / non-Docker run
+#
+# Use this if you would rather run the release binary directly (lighter than
+# Docker on a 1 GB free-tier box, and a bit faster to start).
+#
+#   1. Build on the box:      cd /opt/trader-tony && cargo build --release
+#   2. Install the unit:      sudo cp deploy/systemd/trader-tony.service /etc/systemd/system/
+#   3. Adjust paths below if you did not use /opt/trader-tony
+#   4. sudo systemctl daemon-reload && sudo systemctl enable --now trader-tony
+#   5. journalctl -u trader-tony -f
+#
+# The bot persists everything under ./data relative to its WorkingDirectory, so
+# WorkingDirectory MUST be the directory that contains data/ — otherwise a
+# restart loses track of open positions.
+
+[Unit]
+Description=TraderTony V4 — Solana memecoin trading bot
+Documentation=https://github.com/farmanshahid471-code/meme
+After=network-online.target
+
+[Service]
+Type=simple
+User=trader
+Group=trader
+WorkingDirectory=/opt/trader-tony
+
+# Secrets live in /opt/trader-tony/.env (chmod 600, owned by trader).
+EnvironmentFile=/opt/trader-tony/.env
+Environment=RUST_LOG=info
+Environment=API_HOST=0.0.0.0
+Environment=API_PORT=3030
+
+ExecStart=/opt/trader-tony/target/release/trader-tony-v4
+
+# Trading state must survive crashes: restart, but not in a tight loop.
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Give the bot time to save positions before SIGKILL.
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+# Modest hardening: no new privileges, private tmp, read-only system.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/trader-tony/data
+
+# Logging goes to the journal (journalctl -u trader-tony).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trader-tony
+
+[Install]
+WantedBy=multi-user.target

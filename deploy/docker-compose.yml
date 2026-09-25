@@ -1,0 +1,65 @@
+# TraderTony V4 — docker compose deployment
+#
+#   cp .env.example .env        # fill in your keys (see docs/DEPLOY_FREE.md)
+#   docker compose up -d --build
+#   docker compose logs -f
+#
+# The `data/` directory holds everything the bot must survive a restart:
+# positions.json, strategies.json, fomo_state.json, watchlist.json,
+# simulated_positions.json, copy_traders.json and the Telegram session file.
+# Losing it means losing track of open positions — keep it on disk.
+
+services:
+  trader:
+    # Build locally (default). On a slow/wimpy ARM box prefer the prebuilt
+    # multi-arch image from CI: comment out `build:` and uncomment `image:` below.
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: trader-tony-v4:local
+    # image: ghcr.io/farmanshahid471-code/meme:latest
+    # pull_policy: always
+    container_name: trader-tony
+    restart: unless-stopped
+    # Pass Ctrl+C through to the bot so it can save positions before exiting.
+    init: true
+    stop_grace_period: 30s
+
+    # --- Configuration -----------------------------------------------------
+    # All variables come from the repo's .env (copy .env.example first).
+    env_file:
+      - ../.env
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: "3030"
+      RUST_LOG: ${RUST_LOG:-info}
+      # Where the FOMO copier looks for a refreshable bearer token.
+      FOMO_AUTH_TOKEN_FILE: /app/data/fomo_token.txt
+
+    # --- Networking --------------------------------------------------------
+    # SECURE DEFAULT: the API is only reachable from this machine (SSH tunnel
+    # or a local reverse proxy). To reach it from your browser, set API_KEY in
+    # .env and change this to "3030:3030" — see docs/DEPLOY_FREE.md §6.
+    ports:
+      - "127.0.0.1:3030:3030"
+
+    # --- Persistence -------------------------------------------------------
+    volumes:
+      - ./data:/app/data
+
+    # --- Health ------------------------------------------------------------
+    # /api/health is public (never requires the API key).
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3030/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Kept out of git (see .gitignore): */data is runtime state, .env holds secrets.
