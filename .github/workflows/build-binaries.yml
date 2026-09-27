@@ -164,7 +164,8 @@ jobs:
             | Linux x86_64 | `trader-tony-v4-linux-x86_64.tar.gz` | any normal Linux box, VPS, WSL2 on Windows |
             | Linux ARM64 | `trader-tony-v4-linux-aarch64.tar.gz` | Oracle Cloud Always Free (Ampere A1), Raspberry Pi, ARM VPS |
             | macOS arm64 | `trader-tony-v4-macos-arm64.tar.gz` | Apple Silicon |
-            | macOS x86_64 | `trader-tony-v4-macos-x86_64.tar.gz` | Intel Macs |
+
+            > Intel Macs: use the x86_64 Linux bundle under Docker, or build from source.
 
             ```bash
             tar -xzf trader-tony-v4-linux-x86_64.tar.gz
