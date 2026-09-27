@@ -33,6 +33,14 @@ EMERGENCY_FLATTEN_POSITIONS=true node tools/dev-harness/server.js
 HARNESS_TICK_MS=500 node tools/dev-harness/server.js        # faster market
 ```
 
+## Dashboard config
+
+`js/config.js` is patched at serve time so `API_BASE_URL` is same-origin (the
+harness) and the WebSocket URL follows `location`. In the plain (unpatched) file
+the dashboard auto-detects a local page and falls back to `http://localhost:3030`,
+which is what you want when previewing against the real bot — see
+`docs/RUN_LOCALLY.md`.
+
 ## Walkthrough
 
 1. `node tools/dev-harness/server.js`, open http://localhost:8080

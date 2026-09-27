@@ -1,0 +1,186 @@
+# Build downloadable release binaries
+#
+# The bot is a Rust binary that links Solana's SDK, which is a 1–2 GB toolchain
+# and a 15–40 minute build on a normal machine. This workflow builds it once on
+# GitHub's runners and attaches the result to a Release, so anyone can test
+# locally (and deploy to an ARM box) without installing Rust.
+#
+#   git tag v0.1.0-arena && git push origin v0.1.0-arena   → builds + releases
+#   Actions → "Build binaries" → Run workflow               → artifacts only
+#
+# Artifacts per platform:
+#   trader-tony-v4-linux-x86_64.tar.gz    (Ubuntu 22.04+, Debian 12+, WSL2, most VPS)
+#   trader-tony-v4-linux-aarch64.tar.gz   (Oracle Ampere ARM, Raspberry Pi, ARM VPS)
+#   trader-tony-v4-macos-arm64.tar.gz     (Apple Silicon)
+#   trader-tony-v4-macos-x86_64.tar.gz    (Intel Macs)
+# Each bundle contains the binary, .env.example, the dashboard (webapp/) and the
+# dev tooling (tools/).
+
+name: Build binaries
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # glibc 2.35 (Ubuntu 22.04) so the binary also runs on 24.04 / Debian 12
+          - { os: ubuntu-22.04,      target: x86_64-unknown-linux-gnu,  artifact: linux-x86_64,  ext: '' }
+          - { os: ubuntu-22.04-arm,  target: aarch64-unknown-linux-gnu, artifact: linux-aarch64, ext: '' }
+          - { os: macos-14,          target: aarch64-apple-darwin,      artifact: macos-arm64,   ext: '' }
+          - { os: macos-13,          target: x86_64-apple-darwin,       artifact: macos-x86_64,  ext: '' }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pkg-config libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-bin-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-bin-
+            ${{ runner.os }}-verify-
+
+      - name: cargo build --release
+        run: cargo build --release --locked --target ${{ matrix.target }} --message-format short
+
+      - name: Package bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="trader-tony-v4-${{ matrix.artifact }}"
+          mkdir -p "dist/${NAME}"
+          cp "target/${{ matrix.target }}/release/trader-tony-v4" "dist/${NAME}/"
+          cp .env.example README.md "dist/${NAME}/"
+          cp -r webapp tools docs "dist/${NAME}/"
+          # Keep the bundle lean: no build trees, no secrets, no state.
+          rm -rf "dist/${NAME}"/tools/dev-harness/node_modules
+          cat > "dist/${NAME}/QUICKSTART.txt" <<'EOF'
+          TraderTony V4 — quick start
+          ===========================
+
+          1) .env
+               cp .env.example .env
+             Minimum for a safe local test (no real money):
+               SOLANA_RPC_URL=https://api.mainnet-beta.solana.com   (or a free Helius URL)
+               HELIUS_API_KEY=<any non-empty value; a free key gives real data>
+               WALLET_PRIVATE_KEY=11111111111111111111111111111111  (dummy — demo mode never signs)
+               DEMO_MODE=true
+               DRY_RUN_MODE=true
+             Never put a funded key in .env while DEMO_MODE/DRY_RUN are off.
+
+          2) Run the bot
+               ./trader-tony-v4
+             Dashboard + API: http://localhost:3030
+
+          3) Open the dashboard
+               cd webapp && python3 -m http.server 5173
+             then browse http://localhost:5173  (config.js already points at
+             http://localhost:3030 when served from your own machine).
+
+          4) Or skip the bot entirely and preview the UI against the mock backend:
+               node tools/dev-harness/server.js      → http://localhost:8080
+
+          macOS note: unsigned binaries are quarantined —
+             xattr -dr com.apple.quarantine trader-tony-v4
+
+          Full guide: docs/RUN_LOCALLY.md
+          EOF
+
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            # Binaries built on CI are unsigned; strip quarantine on extraction is
+            # not possible, but strip the ad-hoc signature marker we do not need.
+            :
+          fi
+
+          tar -czf "dist/${NAME}.tar.gz" -C dist "${NAME}"
+          shasum -a 256 "dist/${NAME}.tar.gz" | sed "s|dist/||" > "dist/${NAME}.tar.gz.sha256"
+          ls -lh dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trader-tony-v4-${{ matrix.artifact }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: attach to release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "TraderTony V4 (Arena fork) ${{ github.ref_name }}"
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            Prebuilt binaries for the Arena fork — **test locally without installing Rust**.
+
+            | Platform | File | Use for |
+            |---|---|---|
+            | Linux x86_64 | `trader-tony-v4-linux-x86_64.tar.gz` | any normal Linux box, VPS, WSL2 on Windows |
+            | Linux ARM64 | `trader-tony-v4-linux-aarch64.tar.gz` | Oracle Cloud Always Free (Ampere A1), Raspberry Pi, ARM VPS |
+            | macOS arm64 | `trader-tony-v4-macos-arm64.tar.gz` | Apple Silicon |
+            | macOS x86_64 | `trader-tony-v4-macos-x86_64.tar.gz` | Intel Macs |
+
+            ```bash
+            tar -xzf trader-tony-v4-linux-x86_64.tar.gz
+            cd trader-tony-v4-linux-x86_64
+            cp .env.example .env      # then set DEMO_MODE=true, DRY_RUN_MODE=true
+            ./trader-tony-v4          # API + dashboard backend on http://localhost:3030
+            ```
+
+            See `QUICKSTART.txt` in the bundle and **`docs/RUN_LOCALLY.md`** for the
+            full local test plan (UI-only preview, demo mode against live data,
+            risk-guard drills, API/auth checks).
+
+            ⚠️ Verify the download with the matching `.sha256` file. macOS and
+            Windows will warn about an unsigned binary — that is expected:
+            `xattr -dr com.apple.quarantine trader-tony-v4` on macOS.
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

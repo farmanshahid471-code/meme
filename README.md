@@ -100,6 +100,31 @@ See `.env.example` for all options.
 | `/api/copy/register` | POST | Register for copy trading |
 | `/ws` | WebSocket | Real-time updates |
 
+## Test it locally first (no VPS needed)
+
+Full guide: **[docs/RUN_LOCALLY.md](docs/RUN_LOCALLY.md)** — four levels, from a
+30-second UI preview to a dry run with the safety rails drilled.
+
+```bash
+git clone -b arena/01a0d052-meme https://github.com/farmanshahid471-code/meme.git
+cd meme
+
+# 0) Dashboard + mock backend — Node 18+ only, no build, no keys
+node tools/dev-harness/server.js            # → http://localhost:8080
+
+# 1) Unit tests
+cargo test --locked                         # ~85 tests, no network
+
+# 2) The real bot in demo mode (real data, simulated money)
+cp .env.example .env                        # DEMO_MODE=true, DRY_RUN_MODE=true
+cargo run --release                         # → API + WS on http://localhost:3030
+cd webapp && python3 -m http.server 5173    # → dashboard on http://localhost:5173
+```
+
+Prebuilt binaries (no Rust install needed) — pick the bundle for your OS, or
+`linux-aarch64` for the Oracle ARM box:
+**<https://github.com/farmanshahid471-code/meme/releases>**
+
 ## Deployment
 
 **Free 24/7 hosting (no VPS needed):** see **[docs/DEPLOY_FREE.md](docs/DEPLOY_FREE.md)** —

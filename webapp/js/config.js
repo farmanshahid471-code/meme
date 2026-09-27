@@ -4,9 +4,35 @@
  * VERSION: 2026-06-10-v4 (Fly.io backend)
  */
 
-// Fly.io backend URLs (moved off Railway June 2026)
+// Hosted backend URLs (Fly.io, moved off Railway June 2026).
+// DIFFERENT BACKEND? These two lines are the only place the hosted API and
+// WebSocket URLs live — edit them, or re-point just API_BASE_URL before this
+// file loads. (The dev harness rewrites both, anchored to the line start, so
+// keep them unindented like this.)
 window.API_BASE_URL = 'https://trader-tony-v4.fly.dev';
 window.WS_URL = 'wss://trader-tony-v4.fly.dev/ws';
+
+// ---------------------------------------------------------------------------
+// Local development auto-detect
+// If this page is opened from your own machine (localhost, 127.0.0.1, *.local,
+// or straight off disk with file://), talk to a bot running locally on port
+// 3030 instead of the author's hosted backend. The dev harness
+// (tools/dev-harness) sets window.API_BASE_URL itself and is left alone.
+// ---------------------------------------------------------------------------
+(function () {
+    var HOSTED_DEFAULT = 'https://trader-tony-v4.fly.dev';
+    var host = window.location.hostname;
+    var isLocalPage =
+        window.location.protocol === 'file:' ||
+        host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
+        host === '::1' || host === '[::1]' || /\.local$/.test(host);
+
+    if (isLocalPage && window.API_BASE_URL === HOSTED_DEFAULT) {
+        window.API_BASE_URL = 'http://localhost:3030';
+        window.WS_URL = 'ws://localhost:3030/ws';
+        console.log('[Config] Local page detected — using http://localhost:3030 (bot on this machine)');
+    }
+})();
 
 console.log('[Config] VERSION: 2026-06-10-v4');
 console.log('[Config] API_BASE_URL:', window.API_BASE_URL);

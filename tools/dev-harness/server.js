@@ -822,10 +822,19 @@ function serveStatic(res, pathname) {
     }
     // Point the dashboard at this harness instead of the author's Fly.io backend.
     if (relative === 'js/config.js') {
-      let patched = data
-        .toString('utf8')
-        .replace(/window\.API_BASE_URL\s*=\s*'[^']*';/, "window.API_BASE_URL = '';")
-        .replace(/window\.WS_URL\s*=\s*'[^']*';/, "window.WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';");
+      // Anchored to the start of a line (`^`…`$m`) so an example inside a
+      // comment can never shadow the real assignment. If config.js stops
+      // declaring these unindented, fail loudly instead of silently pointing
+      // the dashboard at the hosted backend.
+      const original = data.toString('utf8');
+      let patched = original
+        .replace(/^window\.API_BASE_URL\s*=\s*'[^']*';\s*$/m, "window.API_BASE_URL = '';")
+        .replace(/^window\.WS_URL\s*=\s*'[^']*';\s*$/m,
+          "window.WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';");
+      if (patched === original) {
+        console.error('[dev-harness] WARNING: could not rewrite window.API_BASE_URL in js/config.js — ' +
+          'the dashboard will call the hosted backend, not this harness.');
+      }
       patched += `\n// [dev-harness] talking to the mock backend on this origin (API key ${API_KEY ? 'required' : 'not required'})\n`;
       res.writeHead(200, { 'Content-Type': MIME['.js'] });
       res.end(patched);
